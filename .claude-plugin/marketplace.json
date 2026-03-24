@@ -1,0 +1,35 @@
+{
+  "name": "espresso-skills",
+  "owner": {
+    "name": "Espresso Clinical",
+    "email": "eng@espressoclinical.com"
+  },
+  "metadata": {
+    "description": "Internal Claude Code skills for the Espresso Clinical team",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "sdlc",
+      "description": "SDLC feature workflow agent — guides from Monday ticket through PR submission",
+      "version": "1.0.0",
+      "author": {
+        "name": "Espresso Clinical"
+      },
+      "source": "./plugins/sdlc",
+      "category": "productivity",
+      "keywords": ["clinical", "espresso", "sdlc", "workflow", "monday"]
+    },
+    {
+      "name": "protocol-kri-extractor",
+      "description": "Extracts Key Risk Indicators (KRIs) from clinical trial protocol PDFs for CRA monitoring",
+      "version": "1.0.0",
+      "author": {
+        "name": "Espresso Clinical"
+      },
+      "source": "./plugins/protocol-kri-extractor",
+      "category": "clinical",
+      "keywords": ["clinical", "espresso", "protocol", "kri", "extraction", "cra"]
+    }
+  ]
+}

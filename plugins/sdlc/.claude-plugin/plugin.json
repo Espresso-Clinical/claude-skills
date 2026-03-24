@@ -1,0 +1,11 @@
+{
+  "name": "sdlc",
+  "version": "1.0.0",
+  "description": "SDLC feature workflow agent — guides from Monday ticket through PR submission",
+  "author": {
+    "name": "Espresso Clinical",
+    "email": "eng@espressoclinical.com"
+  },
+  "license": "UNLICENSED",
+  "keywords": ["clinical", "espresso", "sdlc", "workflow", "monday"]
+}

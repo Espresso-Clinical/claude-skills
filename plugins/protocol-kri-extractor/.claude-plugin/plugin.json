@@ -1,0 +1,11 @@
+{
+  "name": "protocol-kri-extractor",
+  "version": "1.0.0",
+  "description": "Extracts Key Risk Indicators (KRIs) from clinical trial protocol PDFs for CRA monitoring",
+  "author": {
+    "name": "Espresso Clinical",
+    "email": "eng@espressoclinical.com"
+  },
+  "license": "UNLICENSED",
+  "keywords": ["clinical", "espresso", "protocol", "kri", "extraction", "cra"]
+}
