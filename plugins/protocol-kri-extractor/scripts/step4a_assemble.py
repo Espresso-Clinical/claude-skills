@@ -1,73 +1,81 @@
 """
-Step 4A — Assembly
-Merges all validated per-category KRI files into a single cohesive extracted_kris.json.
-Pure Python — no LLM. Deduplicates, re-sequences IDs, builds _meta and categories blocks.
-Output matches the agreed golden set schema exactly.
-"""
+Step 4A — Assembly + Excel Generation
+Merges raw_SOA.json, raw_ELIG.json, raw_SAF.json, raw_END.json, raw_OPS.json
+into a single extracted_kris.json AND generates Extracted_KRIs.xlsx. No LLM required.
 
-import json, sys, os, re
-from collections import defaultdict
+Usage:
+  python step4a_assemble.py --out /path/to/output/ --manifest /path/to/manifest.json
+
+Dependencies:
+  pip install openpyxl --break-system-packages -q
+"""
+import json, os, re, argparse
+
+try:
+    import openpyxl
+    from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+    from openpyxl.utils import get_column_letter
+    HAS_OPENPYXL = True
+except ImportError:
+    HAS_OPENPYXL = False
+    print("WARNING: openpyxl not installed. Excel generation skipped. Run: pip install openpyxl")
 
 CATEGORY_LABELS = {
-    "SOA":  "Schedule of Activities",
+    "SOA": "Schedule of Activities",
     "ELIG": "Eligibility",
-    "SAF":  "Safety & Toxicity",
-    "END":  "Endpoints & Statistics",
-    "OPS":  "Operations & Compliance"
+    "SAF": "Safety & Toxicity",
+    "END": "Endpoints & Statistics",
+    "OPS": "Operations & Compliance"
 }
 
-def normalize_id(kri_id: str, cat: str, seq: int) -> str:
-    """Keep existing ID if well-formed, otherwise generate clean one."""
-    if re.match(r'^[A-Z]+-[A-Z0-9]+-\d{3}$', kri_id):
-        return kri_id
-    # Regenerate
-    # Extract subcategory hint from existing ID
-    parts = kri_id.split("-")
-    if len(parts) >= 2:
-        sub = parts[1] if parts[1].isalpha() else "GEN"
-    else:
-        sub = "GEN"
-    return f"{cat}-{sub}-{seq:03d}"
+SHEET_CONFIG = [
+    {"sheet_name": "SOA",         "cat_key": "SOA",  "has_footnotes": True},
+    {"sheet_name": "ELIGIBILITY", "cat_key": "ELIG", "has_footnotes": False},
+    {"sheet_name": "SAF&TOX",     "cat_key": "SAF",  "has_footnotes": False},
+    {"sheet_name": "END&STAT",    "cat_key": "END",  "has_footnotes": False},
+    {"sheet_name": "OPE&COM",     "cat_key": "OPS",  "has_footnotes": False},
+]
 
-def deduplicate(kris: list) -> list:
-    """Remove exact duplicate rule_for_llm values, keeping first occurrence."""
-    seen_rules = set()
-    out = []
-    for k in kris:
-        rule = (k.get("rule_for_llm") or "").strip().lower()
-        if rule and rule in seen_rules:
-            continue
-        if rule:
-            seen_rules.add(rule)
-        out.append(k)
-    return out
 
-def assemble(output_dir: str, manifest_path: str) -> dict:
+def assemble(out_dir: str, manifest_path: str) -> str:
+    """Merge raw category files into extracted_kris.json."""
     with open(manifest_path) as f:
         manifest = json.load(f)
 
-    protocol_id = manifest.get("protocol_id", "UNKNOWN")
-    study_name = manifest.get("study_name", "")
-    sponsor = manifest.get("sponsor", "")
+    all_kris, categories_meta, by_cat = [], [], {}
 
-    all_kris = []
-    categories_meta = []
-    cats_in_order = ["SOA", "ELIG", "SAF", "END", "OPS"]
-
-    for cat in cats_in_order:
-        raw_path = os.path.join(output_dir, f"raw_{cat}.json")
+    for cat in ["SOA", "ELIG", "SAF", "END", "OPS"]:
+        raw_path = os.path.join(out_dir, f"raw_{cat}.json")
         if not os.path.exists(raw_path):
-            print(f"  {cat}: no raw file — skipping")
+            print(f"  {cat}: not found, skipping")
             continue
 
         with open(raw_path) as f:
             data = json.load(f)
 
-        kris = data.get("kris", [])
+        # Handle multiple JSON formats
+        if isinstance(data, list):
+            kris = data
+        else:
+            kris = data.get("kris", data.get("KRIs", []))
+            if not kris and isinstance(data, dict):
+                for k, v in data.items():
+                    if isinstance(v, list) and len(v) > 0:
+                        kris = v
+                        break
 
-        # Normalize fields
-        cleaned = []
+        # Normalize fields, deduplicate by rule_for_llm
+        seen, cleaned = set(), []
         for k in kris:
+            if not isinstance(k, dict):
+                continue
+            rule = (k.get("rule_for_llm") or "").strip().lower()
+            if rule and rule in seen:
+                continue
+            if rule:
+                seen.add(rule)
+            if not k.get("rule_for_llm") and not k.get("kri_name"):
+                continue
             entry = {
                 "kri_id":              k.get("kri_id", ""),
                 "kri_name":            k.get("kri_name", ""),
@@ -78,80 +86,120 @@ def assemble(output_dir: str, manifest_path: str) -> dict:
                 "protocol_reference":  k.get("protocol_reference", None),
                 "additional_footnotes": k.get("additional_footnotes", None)
             }
-            # Skip empty/placeholder rows
-            if not entry["rule_for_llm"] and not entry["kri_name"]:
-                continue
             cleaned.append(entry)
 
-        # Deduplicate
-        before = len(cleaned)
-        cleaned = deduplicate(cleaned)
-        if before != len(cleaned):
-            print(f"  {cat}: removed {before - len(cleaned)} duplicates")
-
-        # Re-sequence IDs cleanly within category
-        for i, k in enumerate(cleaned, 1):
-            k["kri_id"] = normalize_id(k["kri_id"], cat, i)
-
         all_kris.extend(cleaned)
-        kri_ids = [k["kri_id"] for k in cleaned]
+        by_cat[cat] = cleaned
         categories_meta.append({
-            "id":          cat,
-            "label":       CATEGORY_LABELS[cat],
-            "kri_count":   len(cleaned),
-            "kri_ids":     kri_ids
+            "id": cat,
+            "label": CATEGORY_LABELS[cat],
+            "kri_count": len(cleaned),
+            "kri_ids": [k["kri_id"] for k in cleaned]
         })
         print(f"  {cat}: {len(cleaned)} KRIs")
 
     output = {
         "_meta": {
-            "version":        "1.0.0",
-            "description":    f"Extracted KRI set for {protocol_id}",
-            "protocol":       f"{protocol_id} / {study_name}" if study_name else protocol_id,
-            "sponsor":        sponsor,
-            "extracted_by":   "protocol-kri-extractor v1",
-            "total_kris":     len(all_kris),
-            "total_categories": len(categories_meta),
-            "schema": {
-                "kri_id":              "Stable identifier: CATEGORY-SUBCATEGORY-NNN",
-                "kri_name":            "Short display name",
-                "description":         "What this KRI monitors",
-                "category_id":         "SOA|ELIG|SAF|END|OPS",
-                "category_label":      "Full category name",
-                "rule_for_llm":        "Actionable CRA verification instruction",
-                "protocol_reference":  "Section and page citation with verbatim quote",
-                "additional_footnotes": "Applicable footnote text, or null"
-            }
+            "version": "9.0",
+            "protocol": manifest.get("protocol_id", "UNKNOWN"),
+            "sponsor": manifest.get("sponsor", ""),
+            "extracted_by": "protocol-kri-extractor",
+            "total_kris": len(all_kris),
+            "total_categories": len(categories_meta)
         },
         "categories": categories_meta,
         "kris": all_kris
     }
 
-    return output
-
-def run_assembly(output_dir: str, manifest_path: str):
-    protocol_id = json.load(open(manifest_path)).get("protocol_id", "UNKNOWN")
-    print(f"\nAssembling: {protocol_id}")
-
-    result = assemble(output_dir, manifest_path)
-
-    out_path = os.path.join(output_dir, "extracted_kris.json")
+    out_path = os.path.join(out_dir, "extracted_kris.json")
     with open(out_path, "w") as f:
-        json.dump(result, f, indent=2, ensure_ascii=False)
+        json.dump(output, f, indent=2, ensure_ascii=False)
+    print(f"\n  Total: {len(all_kris)} KRIs -> {out_path}")
 
-    total = result["_meta"]["total_kris"]
-    print(f"\n  Total KRIs: {total}")
-    for cat in result["categories"]:
-        print(f"    {cat['id']}: {cat['kri_count']}")
-    print(f"\n  Saved → {out_path}")
+    # Generate Excel
+    if HAS_OPENPYXL:
+        xlsx_path = generate_excel(out_dir, by_cat)
+        print(f"  Excel: {xlsx_path}")
+    else:
+        print("  Excel: SKIPPED (openpyxl not installed)")
+
     return out_path
 
+
+def generate_excel(out_dir: str, by_cat: dict) -> str:
+    """Generate Extracted_KRIs.xlsx with 5 category sheets.
+
+    Format: blue header row, white bold text, frozen row 1, text wrapping,
+    thin borders, auto-width columns.
+    """
+    wb = openpyxl.Workbook()
+    wb.remove(wb.active)  # Remove default sheet
+
+    # Styles
+    hdr_font = Font(bold=True, size=11, color='FFFFFF')
+    hdr_fill = PatternFill(start_color='4472C4', end_color='4472C4', fill_type='solid')
+    wrap = Alignment(wrap_text=True, vertical='top')
+    border = Border(
+        left=Side(style='thin'), right=Side(style='thin'),
+        top=Side(style='thin'), bottom=Side(style='thin')
+    )
+
+    for cfg in SHEET_CONFIG:
+        ws = wb.create_sheet(cfg["sheet_name"])
+        kris = by_cat.get(cfg["cat_key"], [])
+
+        # Column headers
+        if cfg["has_footnotes"]:
+            headers = ["KRI Name", "Description", "Category",
+                       "Rule to Check- for LLM", "Referance", "Additional Footnotes"]
+            widths = [35, 50, 20, 65, 35, 50]
+        else:
+            headers = ["KRI Name", "Description", "Category",
+                       "Referance", "Rule to Check- for LLM"]
+            widths = [35, 50, 20, 35, 65]
+
+        # Write header row
+        for col, h in enumerate(headers, 1):
+            c = ws.cell(row=1, column=col, value=h)
+            c.font = hdr_font
+            c.fill = hdr_fill
+            c.alignment = wrap
+            c.border = border
+
+        # Write KRI rows
+        for i, kri in enumerate(kris, 2):
+            name = kri.get("kri_name", kri.get("kri_id", ""))
+            desc = kri.get("description", "")
+            cat_label = kri.get("category_label", cfg["cat_key"])
+            rule = kri.get("rule_for_llm", "")
+            ref = kri.get("protocol_reference", "")
+            fn = kri.get("additional_footnotes") or ""
+
+            if cfg["has_footnotes"]:
+                row_data = [name, desc, cat_label, rule, ref, fn]
+            else:
+                row_data = [name, desc, cat_label, ref, rule]
+
+            for col, val in enumerate(row_data, 1):
+                c = ws.cell(row=i, column=col, value=str(val) if val else "")
+                c.alignment = wrap
+                c.border = border
+
+        # Set column widths
+        for col, w in enumerate(widths, 1):
+            ws.column_dimensions[get_column_letter(col)].width = w
+
+        # Freeze header row
+        ws.freeze_panes = 'A2'
+
+    xlsx_path = os.path.join(out_dir, "Extracted_KRIs.xlsx")
+    wb.save(xlsx_path)
+    return xlsx_path
+
+
 if __name__ == "__main__":
-    PROTOCOLS = {
-        "ENX-CL-05-002": "/home/claude/protocol-kri-extractor/output/ENX-CL-05-002",
-        "B1481038":       "/home/claude/protocol-kri-extractor/output/B1481038",
-        "LCZ696G2301":    "/home/claude/protocol-kri-extractor/output/LCZ696G2301"
-    }
-    target = sys.argv[1] if len(sys.argv) > 1 else "ENX-CL-05-002"
-    d = PROTOCOLS[target]
-    run_assembly(d, os.path.join(d, "manifest.json"))
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--out", required=True, help="Output directory with raw_*.json files")
+    parser.add_argument("--manifest", required=True, help="Path to manifest.json")
+    args = parser.parse_args()
+    assemble(args.out, args.manifest)
