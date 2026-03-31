@@ -338,8 +338,8 @@ Extract the complete SoA structure. Return JSON:
     }
   ],
   "footnotes": {
-    "9": "full verbatim footnote text",
-    "10": "full verbatim footnote text"
+    "9": "full verbatim footnote text — word for word, no truncation",
+    "10": "full verbatim footnote text — word for word, no truncation"
   },
   "cross_visit_rules": ["any timing/washout/sequencing rules in SoA section text"]
 }
@@ -347,7 +347,8 @@ Extract the complete SoA structure. Return JSON:
 Rules:
 - Do NOT invent visits or procedures — only what is in the table
 - required_at / source_only_at must reference visit_id values you defined
-- footnotes: include COMPLETE verbatim text — never truncate
+- footnotes: include COMPLETE verbatim text — word for word, never truncate, never paraphrase
+- footnote_numbers: capture ALL footnote superscripts for this procedure — from the procedure name cell, from any X-mark cells (e.g. "X¹⁰" means footnote 10 applies at that specific visit), and from the visit column header if applicable
 - EDGE-COLUMN BIAS CHECK: PDF text extraction destroys column positioning. X marks
   near the first and last columns are most prone to misalignment. For each procedure:
   1. Count the total X marks you see in that row (including marks that wrapped to the
@@ -457,14 +458,35 @@ The SOA extraction follows a strict 6-step process using the Camelot CSV as grou
 
 **Step SOA-2 — Table Verification**: Compare the Camelot `soa_table.csv` against the PDF page image for verification. Flag any cells where Camelot shows empty but the image shows X (footnote superscript issue). Save the verified matrix.
 
-**Step SOA-3 — Check-in KRIs**: For each visit, create ONE check-in KRI (SOA-CHECKIN-{VID}) verifying the subject attended within the protocol-specified timing window. Include: visit window (±days), fasting requirements, scheduling constraints.
+**Step SOA-3 — Check-in KRIs**: For each visit, create ONE check-in KRI (SOA-CHECKIN-{VID}) verifying the subject attended within the protocol-specified timing window.
+
+The visit window must appear in TWO places:
+1. **`description`**: State the window clearly and coherently, e.g. *"Verifies that Visit 8 (Week 14) occurred and fell within the protocol-specified window of ±3 days. Protocol states: 'Visits 8 (the Week 14 visit), 11 (the Week 52 visit), both which will have visit window of ±3 days'."*
+2. **`additional_footnotes`**: Quote the exact verbatim sentence(s) from the footnote (or table cell) that define this visit's window — word for word. If the window is defined in a long multi-topic footnote, extract only the sentence(s) that define THIS visit's window specifically.
+
+Window source priority:
+- If the window is stated in the SoA table cell itself → use that
+- If defined in a visit-schedule footnote (e.g. a long footnote 1 covering all visit windows) → find and quote the specific sentence for this visit
+- If no window is stated in the protocol → description says "no protocol-specified window defined" and `additional_footnotes` is null
 
 **Step SOA-4 — Procedure KRIs**: For each visit, create:
 - ONE procedure-list KRI (SOA-PROC-{VID}) listing ALL procedures required at that visit in the format: `V1 - procedure name`
 - ONE KRI per procedure × visit cell (SOA-{VID}-{procedure}) with the specific check
 
-**Step SOA-5 — Footnote Enrichment**: After table-based KRIs are complete, read all protocol footnotes and:
-- Enrich each procedure KRI with relevant footnote details
+**Step SOA-5 — Footnote Enrichment**: After table-based KRIs are complete, read all protocol footnotes and enrich each KRI's `additional_footnotes` field using these rules:
+
+**Footnote verbatim rules (strictly enforced)**:
+- Always copy footnote text word-for-word from the protocol. Never paraphrase, summarize, or reword.
+- **Short / single-topic footnote** (covers one procedure or one clear topic): copy the entire footnote verbatim.
+- **Long / multi-topic footnote** (covers many procedures, visit windows, fasting, dosing, etc.): identify only the sentence(s) directly relevant to this KRI's specific procedure × visit. Quote those sentences verbatim. If the relevant content is embedded mid-sentence in a longer sentence that also covers irrelevant material, quote the full sentence. Never truncate mid-sentence.
+- If nothing in the footnote adds information beyond what is already in `rule_for_llm`, set `additional_footnotes` to null.
+
+**Footnote location awareness**: A procedure KRI inherits footnotes from:
+1. The procedure row label (superscript on the procedure name)
+2. The specific X-mark cell for this visit (superscript on the X itself, e.g. "X¹⁰" → footnote 10 applies specifically at this visit)
+3. The visit column header (if the column carries a superscript)
+All three sources must be checked. Cell-level footnotes (on the X itself) often carry visit-specific conditions — these are especially important.
+
 - Create **cross-visit rule KRIs** (SOA-CROSS-*) for protocol-wide rules:
   - Fasting requirements (≥10h before blood draws, exceptions for CK/LFTs/pregnancy)
   - IP dosing window (1 day before to 4 days after scheduled date)
@@ -475,6 +497,19 @@ The SOA extraction follows a strict 6-step process using the Camelot CSV as grou
   - EOS safety follow-up period (typically 28-40 days post-last-dose)
   - V5/baseline observation period for IP administration
   - Visit-specific special rules from footnotes
+
+**Cross-visit KRI scope accuracy (mandatory)**:
+Before naming or describing any cross-visit or cross-sectional KRI, read the source statement carefully and determine its exact scope. Apply these rules:
+- **Do NOT use "All Visits" in the KRI name or description unless the rule genuinely applies to every single visit in the trial** — including screening, all treatment visits, and follow-up. If the statement says "before each blood draw visit" or "at dosing visits only", the name must reflect the actual scope (e.g. "Dosing Visits V1–V5 — fasting requirement" not "All Visits — fasting").
+- If the rule applies to a defined subset: name the subset explicitly. Use the protocol's own terminology where possible.
+- If the protocol gives a list of visits (e.g. "Visits 1, 2, 3, and 5"), list them explicitly in the `rule_for_llm` — do not generalize.
+
+**Multiple protocol references (mandatory for cross-sectional KRIs)**:
+If a SOA rule found outside the main table (footnote, other protocol section, cross-sectional sweep) is supported by more than one location in the protocol:
+- List ALL source references in the `protocol_reference` field.
+- Format: `"Section X.X, Page N: \"verbatim quote\"; Footnote Y, Page M: \"verbatim quote\""`.
+- Do not collapse two distinct source locations into one entry.
+- The additional_footnotes field captures footnote text verbatim; the protocol_reference field captures section/page citations. Both may contain multiple entries for the same KRI.
 
 **Step SOA-6 — Self-Verification**: Cross-check that every X cell in the Camelot CSV has a corresponding KRI. Report: `N/N cells covered = 100%`. Flag any gaps.
 
@@ -496,13 +531,17 @@ PROTOCOL TEXT:
 EXTRACTION RULES:
 - One KRI per procedure × visit cell where the procedure is required
 - rule_for_llm MUST start with visit prefix: "V1-", "S1-", "All visits-", etc.
-- Visit check-in KRIs: include window (e.g. "within 90 ± 7 days")
+- Visit check-in KRIs: the `description` MUST state the exact protocol window for that visit (e.g. "Verifies Visit 8 (Week 14) occurred within ±3 days. Protocol: '..verbatim sentence..'"). The `additional_footnotes` must quote the verbatim sentence(s) from the footnote that define this visit's window. If the window differs per visit within the same footnote, extract only the sentence(s) for THIS visit.
 - Treatment visits: vital signs measured TWICE (pre + post injection per footnote)
 - Washout KRIs: say "by checking medication logs and visit timestamps"  
 - Lab KRIs: include ALL specific analytes from the footnote — never "biochemistry panel" alone
 - Vitals KRIs: use exact positioning wording from Section 13.2 / equivalent
 - IMP admin KRIs: include exact dose, volume, route, person who administers, post-injection observation time
-- Include ALL footnote details that apply to that procedure × visit
+- **Footnotes — verbatim always**: `additional_footnotes` must be copied word-for-word from the protocol.
+  - Short/single-topic footnotes: copy entire footnote verbatim.
+  - Long/multi-topic footnotes: copy only the sentence(s) relevant to THIS procedure × visit, verbatim. Never truncate mid-sentence.
+  - Cell-level footnotes (superscript on the X mark itself): these often carry visit-specific conditions — quote them for this visit's KRI specifically.
+  - If nothing in the footnote adds new information beyond `rule_for_llm`: set to null.
 - Measurement specs: height/weight KRIs must include units (kg, cm) and preparation
   (e.g. "shoes removed", "after voiding") when the protocol specifies them
 - Questionnaire recall periods: if a PRO instrument has a recall period (e.g. "past week",
@@ -514,30 +553,53 @@ EXTRACTION RULES:
   capture both explicitly — do not collapse into "medications" alone
 - Stability windows: if concomitant therapy must be stable for N weeks/months prior,
   include the stability duration in the rule
+- rule_for_llm writing: every `rule_for_llm` must specify WHAT to check, WHERE (data source),
+  WHEN (visit/timepoint), and the binary PASS condition (exact threshold or comparator).
+  Example: "V1 — Verify that the IMP injection (eCRF IMP administration field) was given AFTER
+  blood draw and physical exam at Visit 1 (dosing sequence per footnote 3). YES if sequence
+  is correct, NO if IMP given before blood draw or physical exam."
+- Cross-visit scope accuracy: before naming a KRI as "All Visits —", read the source
+  statement. Only use "All Visits" if the rule genuinely applies to EVERY visit. If the
+  rule applies to a subset, name the exact visits or visit type in the KRI name and rule.
+- Multiple references: if a cross-visit or cross-sectional rule has more than one source
+  location in the protocol, list ALL references in `protocol_reference` separated by ";".
+  Do not collapse two distinct citations into one.
 - Visit window KRIs (MANDATORY — every visit and screening):
   For EVERY visit in the SoA table — including all screening visits (S-I, S-II, etc.),
   all treatment visits (V1, V2, V3, etc.), and all follow-up visits (V4, V5, V6/EOS, etc.)
   — create one dedicated "check-in / within-window" KRI. This KRI verifies that:
     1. The visit actually occurred
     2. The visit occurred within the protocol-specified timing window
-  Use the day reference AND window tolerance from the ontology (e.g. "Day -45 to 0",
-  "Day 14 ± 3 days", "Month 3 ± 7 days"). If the protocol specifies an allowed range
-  or deviation window for the visit, embed it in rule_for_llm.
-  Examples:
+
+  **`description` field (MANDATORY content)**: Must state the visit window clearly and
+  include a verbatim quote of the protocol text that defines it. Example:
+    "Verifies that Visit 8 (Week 14) occurred and fell within the protocol-specified
+    window of ±3 days. Protocol states: 'After Visit 5, all visits will have a visit
+    window ±14 days, except for Visits 8 (the Week 14 visit), 11 (the Week 52 visit),
+    both which will have visit window of ±3 days'."
+
+  **`additional_footnotes` field**: Quote verbatim only the sentence(s) from the
+  footnote (or table) that define THIS visit's window. If the same footnote covers
+  all visits in one passage, extract only the sentence specific to this visit (or the
+  sentence covering the group this visit belongs to). Never quote the entire footnote
+  if it covers unrelated topics.
+
+  **`rule_for_llm` field**: Embed the window tolerance directly, e.g.:
     - "S1- Verify that the Screening I visit occurred within the allowed window (Day -45 to Day 0)"
-    - "S2- Verify that the Screening II visit occurred within [N] days after Screening I"
-    - "V1- Verify that the Day 0 treatment visit occurred within the allowed window"
-    - "V2- Verify that the Day 14 treatment visit occurred within 14 ± 3 days of Day 0"
-    - "V4- Verify that the 3-month follow-up visit occurred within 90 ± 7 days of first treatment"
-  If the SoA table or protocol text does not specify a window for a particular visit,
-  still create the check-in KRI using whatever timing reference is available (e.g.
-  "Day -45 to 0" for screening). Never skip a visit — if the protocol has it, it
+    - "V2- Verify that Visit 2 occurred within 14 days after Visit 1"
+    - "V8- Verify that Visit 8 (Week 14) occurred within ±3 days of the target date (Week 14)"
+    - "V11- Verify that Visit 11 (Week 52) occurred within ±3 days of the target date (Week 52)"
+
+  **Window source**: Use the window from the SoA table cell if present; otherwise find
+  the visit-schedule footnote and extract the relevant sentence for this visit.
+  If no window is defined: description says "no protocol-specified window defined" and
+  `additional_footnotes` is null. Never skip a visit — if the protocol has it, it
   gets a window KRI.
 
 Return ONLY a JSON array starting with [ and ending with ]
 ```
 
-### ELIG prompt
+### ELIG prompt (Pass A — Primary)
 ```
 Extract Eligibility KRIs from this protocol section.
 Protocol: {protocol_id}
@@ -546,12 +608,38 @@ PROTOCOL TEXT:
 {section_text}
 
 EXTRACTION RULES:
-- One KRI per criterion or per meaningful sub-criterion (e.g. 5a, 5b → two KRIs)
+
+RULE_FOR_LLM WRITING (mandatory — applies to every KRI):
+The `rule_for_llm` field is a system instruction for an LLM agent, not a human summary.
+Write it as a precise, binary, executable check that specifies:
+  - WHAT data item or fact to check (e.g. "LDL-C value in screening lab report")
+  - WHERE / in what source document or field (e.g. "subject's medical history", "eCRF eligibility form")
+  - WHEN / at what timepoint (e.g. "at Screening", "prior to first dose", "within 6 months before randomization")
+  - WHAT binary condition = PASS: the exact threshold, comparator, or relationship
+    (e.g. "is ≥ 70 mg/dL", "is absent from medical history", "was obtained within 6 months of screening")
+Use conditional language: is / is not, ≥ / ≤ / >, before / after, within / outside, documented / absent.
+NEVER write rule_for_llm as a plain description. It must read as an executable instruction.
+
+ATOMIZATION (mandatory — read carefully):
+The goal is a complete set of binary rules — each KRI must be checkable as YES or NO
+independently of all other KRIs. Apply these rules without exception:
+- Each KRI represents exactly ONE independently verifiable binary condition.
+  A condition is "independently verifiable" if a CRA can confirm it without needing
+  to verify any other KRI simultaneously.
+- If a single criterion sentence or sub-clause contains TWO or more independently
+  verifiable conditions, split them into separate KRIs (one KRI per condition).
+- If a criterion item (e.g. criterion 14) has multiple sub-parts (14a, 14b, 14c...),
+  create one KRI per sub-part — even if they share a parent heading.
+- Exception: conditions that are inherently coupled (e.g. "dose X was given at time T"
+  — the dose and the timing cannot be meaningfully separated) should stay together.
+- When in doubt: split. A set with too many atomic KRIs is safer than a set with
+  compound KRIs that hide partial compliance.
+
+CONTENT RULES:
 - Inclusion rule_for_llm: "Verify that [requirement] is documented/confirmed"
 - Exclusion rule_for_llm: "Verify the absence of [condition]" (preferred phrasing)
 - Include exact numeric thresholds, timeframes, clinical terms verbatim
-- Lab thresholds: list each parameter and exact threshold value
-- Multi-part exclusion criteria (e.g. criterion 14a through 14k): one KRI per letter
+- Lab thresholds: list each parameter and exact threshold value separately
 - Timing in criteria: if a criterion specifies a timeframe (e.g. "symptoms ≥ 3 months",
   "X-ray within 6 months"), embed the timeframe directly in rule_for_llm — not only
   in additional_footnotes
@@ -561,7 +649,7 @@ EXTRACTION RULES:
 Return ONLY a JSON array
 ```
 
-### SAF prompt
+### SAF prompt (Pass A — Primary)
 ```
 Extract Safety & Toxicity KRIs from this protocol section.
 Protocol: {protocol_id}
@@ -570,21 +658,46 @@ PROTOCOL TEXT:
 {section_text}
 
 EXTRACTION RULES:
-- Cover: AE/SAE collection windows, reporting timelines (24h, 48h), allergic reaction 
-  management (exact drug names + doses), stopping rules, DSMB triggers, rescue medication 
+
+RULE_FOR_LLM WRITING (mandatory — applies to every KRI):
+The `rule_for_llm` field is a system instruction for an LLM agent, not a human summary.
+Write it as a precise, binary, executable check that specifies:
+  - WHAT data item or event to check (e.g. "SAE report submission timestamp", "AE onset date")
+  - WHERE / in what source (e.g. "SAE form in eCRF", "adverse event log", "concomitant medication list")
+  - WHEN / relative to what event or timepoint (e.g. "within 24 hours of investigator awareness", "from first IMP dose through 30 days post-last-dose")
+  - WHAT binary condition = PASS: the exact threshold, comparator, or relationship
+    (e.g. "is ≤ 24h", "is documented as Grade ≥ 3", "occurred after first dose", "is absent from concomitant meds after Day 1")
+Use conditional language: is / is not, ≥ / ≤ / >, within / outside, before / after, documented / absent.
+NEVER write rule_for_llm as a plain description. It must read as an executable instruction.
+
+ATOMIZATION (mandatory — read carefully):
+The goal is a complete set of binary rules — each KRI must be checkable as YES or NO
+independently of all other KRIs. Apply these rules without exception:
+- Each KRI represents exactly ONE independently verifiable binary condition.
+- If a single sentence or paragraph contains TWO or more independently verifiable
+  conditions (e.g. "SAE must be reported within 24h AND followed up within 7 days"),
+  split into separate KRIs — one per condition.
+- If a rule has multiple distinct components (e.g. an allergic reaction management
+  protocol with several sequential steps), create one KRI per step if each step can
+  fail independently.
+- Exception: conditions that are inherently coupled cannot be split.
+- When in doubt: split.
+
+CONTENT RULES:
+- Cover: AE/SAE collection windows, reporting timelines (24h, 48h), allergic reaction
+  management (exact drug names + doses), stopping rules, DSMB triggers, rescue medication
   dose caps, pregnancy reporting, AESI definitions, post-injection observation period
 - Include exact drug names and doses for emergency treatment protocols
-- Include exact reporting timeframes
-- Distinguish: pre-IMP conditions = medical history (not AE)
-- Boundary rules: what is collected when (e.g. only SAEs beyond 6 months)
-- Concomitant medication timing: prohibited medications with specific washout/exclusion
-  windows (e.g. "IA corticosteroids prohibited within 3 months") should each get their
-  own KRI with the exact timing
+- Include exact reporting timeframes — never round or generalize (24h ≠ "promptly")
+- Distinguish: pre-IMP conditions = medical history (not AE) — include this boundary rule
+- Boundary rules: what is collected when (e.g. only SAEs beyond 6 months): one KRI per boundary
+- Concomitant medication timing: each prohibited medication with its specific washout/
+  exclusion window gets its own KRI with the exact timing
 
 Return ONLY a JSON array
 ```
 
-### END prompt
+### END prompt (Pass A — Primary)
 ```
 Extract Endpoints & Statistics KRIs from this protocol section.
 Protocol: {protocol_id}
@@ -593,19 +706,45 @@ PROTOCOL TEXT:
 {section_text}
 
 EXTRACTION RULES:
+
+RULE_FOR_LLM WRITING (mandatory — applies to every KRI):
+The `rule_for_llm` field is a system instruction for an LLM agent, not a human summary.
+Write it as a precise, binary, executable check that specifies:
+  - WHAT data item or analysis output to check (e.g. "primary endpoint value at Week 24", "analysis set classification")
+  - WHERE / in what source (e.g. "statistical analysis output", "eCRF assessment form", "randomization record")
+  - WHEN / at what timepoint or analysis stage (e.g. "at Week 24", "at primary analysis", "at baseline")
+  - WHAT binary condition = PASS: the exact definition, comparator, or membership rule
+    (e.g. "is calculated as change from baseline using ANCOVA", "includes all randomized subjects regardless of dose received", "used the pre-specified gatekeeping sequence")
+Use conditional language: is / is not, matches / does not match, includes / excludes, was applied / was not applied.
+NEVER write rule_for_llm as a plain description. It must read as an executable instruction.
+
+ATOMIZATION (mandatory — read carefully):
+The goal is a complete set of binary rules — each KRI must be checkable as YES or NO
+independently of all other KRIs. Apply these rules without exception:
+- Each KRI represents exactly ONE independently verifiable binary condition.
+- If a single endpoint definition contains multiple measurable components (e.g. primary
+  endpoint defined as "change from baseline in X at Week 12, assessed by Y, using Z
+  method"), split only if the components are independently verifiable and can fail
+  independently. If they are all part of a single composite definition, keep together.
+- Statistical rules that are independent of each other (e.g. alpha level vs. imputation
+  strategy vs. gatekeeping sequence) get separate KRIs.
+- Each analysis set definition (ITT, PP, safety set, etc.) gets its own KRI.
+- Exception: conditions that are inherently coupled cannot be split.
+- When in doubt: split.
+
+CONTENT RULES:
 - Order: primary → key secondary → secondary → exploratory → ICEs → analysis sets → statistics
 - One KRI per endpoint, per ICE type, per analysis set definition
-- Analysis sets: use exact protocol definitions
-  (e.g. ITT = ALL randomized, not just ≥1 dose)
-- Statistical rules: ANCOVA covariates, gatekeeping sequence, alpha levels, 
-  imputation strategy, interim analysis trigger criteria
+- Analysis sets: use exact protocol definitions (e.g. ITT = ALL randomized, not just ≥1 dose)
+- Statistical rules: ANCOVA covariates, gatekeeping sequence, alpha levels,
+  imputation strategy, interim analysis trigger criteria — one KRI per rule
 - Baseline definitions: general (Day 0 pre-dose) AND endpoint-specific if different
-- ADP-NRS calculation method if applicable
+- ADP-NRS or other composite score calculation method: one KRI per calculation rule
 
 Return ONLY a JSON array
 ```
 
-### OPS prompt
+### OPS prompt (Pass A — Primary)
 ```
 Extract Operations & Compliance KRIs from this protocol section.
 Protocol: {protocol_id}
@@ -614,24 +753,372 @@ PROTOCOL TEXT:
 {section_text}
 
 EXTRACTION RULES:
+
+RULE_FOR_LLM WRITING (mandatory — applies to every KRI):
+The `rule_for_llm` field is a system instruction for an LLM agent, not a human summary.
+Write it as a precise, binary, executable check that specifies:
+  - WHAT operational item or document to check (e.g. "IMP storage temperature log", "eCRF sign-off date", "IP accountability record")
+  - WHERE / in what source (e.g. "IP accountability log", "delegation of authority log", "informed consent form")
+  - WHEN / at what timepoint or process stage (e.g. "prior to first dose", "at each dispensing visit", "within 15 years of study completion")
+  - WHAT binary condition = PASS: the exact requirement, threshold, or state
+    (e.g. "is maintained at ≤ -150°C continuously", "was signed before first study procedure", "is present for every dispensed unit")
+Use conditional language: is / is not, ≥ / ≤ / >, was signed / was not signed, is present / is absent, is documented / is missing.
+NEVER write rule_for_llm as a plain description. It must read as an executable instruction.
+
+ATOMIZATION (mandatory — read carefully):
+The goal is a complete set of binary rules — each KRI must be checkable as YES or NO
+independently of all other KRIs. Apply these rules without exception:
+- Each KRI represents exactly ONE independently verifiable binary condition.
+- If a single operational requirement has multiple independent sub-requirements (e.g.
+  "IMP must be stored at -20°C in a locked room with a temperature log") split into:
+  KRI-1: storage temperature; KRI-2: locked storage; KRI-3: temperature log maintained.
+  Each can fail independently.
+- Blinding, unblinding, and emergency unblinding are separate independent processes —
+  each gets its own KRI.
+- Each unique retention duration (different document types may have different durations)
+  gets its own KRI.
+- Exception: conditions that are inherently coupled cannot be split.
+- When in doubt: split.
+
+CONTENT RULES:
 - Cover: IMP storage conditions (exact temperatures), who handles IMP, who administers,
   blinding approach, unblinding documentation, record retention duration,
   eCRF requirements, participant withdrawal/replacement rules,
   regulatory approvals required, 21 CFR Part 11 compliance
-- Include exact temperature ranges
-- Include exact retention durations (years)
-- Central analyses: cover all central review requirements — imaging (X-ray, MRI),
-  lab, ECG — including verification that data was transmitted to the central facility
-  and results were reviewed centrally
-- Data governance: include Investigator approval/sign-off of eCRF data, delegation
-  of authority logs, and any regulatory sign-off requirements
-- Participant rights: include ICF copy provision to participant, re-consent rules,
-  and any participant notification requirements
+- Include exact temperature ranges — never round (e.g. -150°C ≠ "ultra-cold")
+- Include exact retention durations (years) per document type
+- Central analyses: cover all central review requirements — imaging (X-ray, MRI), lab,
+  ECG — including verification that data was transmitted to the central facility and
+  results were reviewed centrally
+- Data governance: Investigator approval/sign-off of eCRF data, delegation of authority
+  logs, regulatory sign-off requirements — each as a separate KRI
+- Participant rights: ICF copy provision, re-consent rules, participant notification
+  requirements — each as a separate KRI
 
 Return ONLY a JSON array
 ```
 
-**Save output**: `{out_dir}/raw_{CATEGORY}.json`
+---
+
+## Pass B — Cross-Sectional Sweep (ELIG / SAF / END / OPS)
+
+**Purpose**: Find domain-relevant rules that appear OUTSIDE the sections tagged to this domain in the manifest — buried in other domain sections, footnotes, method descriptions, appendices, or scattered throughout the same protocol. This is a full cross-sectional scan of the entire protocol document, not a comparison between different protocols.
+
+**When to run**: After Pass A completes for a domain. Feed the entire protocol text + the Pass A KRI list.
+
+**Prompt**:
+```
+You are performing a cross-sectional sweep of the protocol for {DOMAIN_LABEL} KRIs.
+This means scanning the entire protocol document — not just the sections tagged to this domain —
+to find any relevant rules hidden in other sections, footnotes, or appendices.
+Protocol: {protocol_id}
+
+PASS A KRIs ALREADY EXTRACTED (do NOT re-extract these):
+{pass_a_kri_list}
+
+FULL PROTOCOL TEXT:
+{full_protocol_text}
+
+TASK:
+Read the entire protocol. Find any rule, requirement, statement, or specification
+that:
+  1. Belongs to the {DOMAIN_LABEL} domain
+  2. Is NOT already captured in the Pass A KRI list above
+  3. Appears anywhere in the protocol — even in sections primarily belonging to
+     another domain, in footnotes, tables, appendices, or scattered paragraphs
+
+WHAT COUNTS as a {DOMAIN_LABEL} rule: {domain_definition}
+
+WHAT DOES NOT COUNT:
+- A rule that is semantically equivalent to any Pass A KRI (even if worded differently)
+- Pure narrative text with no verifiable requirement
+- General statements without specific thresholds, timelines, or actionable conditions
+
+Apply the same atomization rule as Pass A: each KRI must be exactly ONE independently
+verifiable binary condition. Split compound rules.
+
+Return ONLY a JSON array of net-new KRIs (empty array [] if nothing new found).
+```
+
+**Save output**: Merge Pass B results into the domain's raw JSON before Pass C.
+
+---
+
+## Pass C — Atomic Decomposition (ELIG / SAF / END / OPS)
+
+**Purpose**: Final review of the combined Pass A + B KRI list to catch any remaining compound rules that were not split in the initial passes.
+
+**When to run**: After Pass A and Pass B are merged for a domain.
+
+**Prompt**:
+```
+Review the following {DOMAIN_LABEL} KRI list for atomic decomposition.
+Protocol: {protocol_id}
+
+KRI LIST:
+{combined_pass_ab_kris}
+
+TASK:
+For each KRI, evaluate: does its `rule_for_llm` contain MORE THAN ONE independently
+verifiable binary condition?
+
+A condition is independently verifiable if:
+- A CRA could answer YES or NO to it without checking any other condition
+- It could fail without any other condition failing
+- It references a distinct source fact (different threshold, different timeframe,
+  different document type, different person, different process step)
+
+If a KRI passes this test (it is already atomic): output it unchanged.
+
+If a KRI FAILS this test (it is compound): split it into N atomic KRIs, where N equals
+the number of independent conditions. Each new KRI inherits the parent's
+`protocol_reference` and `additional_footnotes`. Generate new sequential IDs
+(append _A, _B, _C... to the parent ID).
+
+Output the complete final KRI list — both unchanged KRIs and split replacements.
+Removed compound parent KRIs should NOT appear in the output.
+
+Return ONLY a JSON array.
+```
+
+**Save output**: Overwrites the domain's raw JSON. This is the final extraction output fed into Phase 2.5.
+
+---
+
+## Phase 2.5 — Deduplication
+
+Runs after ALL 5 domains have completed Phase 2 (Pass A + B + C for non-SOA; 6-step process for SOA).
+
+---
+
+## Step D1 — Within-Domain Deduplication
+
+**Purpose**: Remove semantically equivalent KRIs within each domain. Runs as 4 parallel LLM calls (one per non-SOA domain). SOA is excluded from this step — its structured process prevents within-domain duplicates.
+
+**Prompt** (run once per domain):
+```
+Deduplicate the following {DOMAIN_LABEL} KRI list.
+Protocol: {protocol_id}
+
+KRI LIST:
+{domain_kri_list}
+
+TASK:
+Identify clusters of KRIs that check the same underlying clinical requirement —
+even if they are worded differently, have different levels of detail, or came from
+different sections of the protocol.
+
+Two KRIs are duplicates if:
+- A CRA would consult the same source document/section and verify the same requirement
+- One rule is a less-specific version of the other (covering the same condition)
+
+They are NOT duplicates if:
+- They check different thresholds (e.g. "within 24h" vs "within 7 days" for different events)
+- They apply to different populations, visits, or time windows
+- One checks a precondition and the other checks an outcome (even of the same event)
+
+For each duplicate cluster:
+- KEEP the single most complete and specific version (most precise thresholds,
+  clearest actionable instruction, most specific protocol citation)
+- REMOVE all others
+
+Output format — a JSON object:
+{
+  "kept": [ ...final deduplicated KRI list... ],
+  "removed": [
+    { "kri_id": "...", "reason": "duplicate of {kept_kri_id}: [one sentence explanation]" },
+    ...
+  ]
+}
+```
+
+**Save output**: Update `raw_{CATEGORY}.json` with the `kept` list. Append `removed` entries to `dedup_report.json`.
+
+---
+
+## Step D2 — Cross-Domain Deduplication
+
+**Purpose**: Remove KRIs that appear in multiple domains checking the same clinical requirement. One LLM call with all 5 domain lists.
+
+**Prompt**:
+```
+Cross-domain deduplication for protocol {protocol_id}.
+
+You are given KRI lists from all 5 domains. Find any KRIs across different domains
+that check the same underlying clinical requirement.
+
+SOA KRIs: {soa_kris}
+ELIG KRIs: {elig_kris}
+SAF KRIs: {saf_kris}
+END KRIs: {end_kris}
+OPS KRIs: {ops_kris}
+
+TASK:
+Identify cross-domain duplicate pairs or groups — KRIs in different domains that
+a CRA would satisfy by checking the same protocol requirement.
+
+For each cross-domain duplicate group:
+1. Determine the SINGLE most appropriate domain for this requirement
+   (the domain whose core purpose this requirement best serves)
+2. KEEP the KRI in that domain
+3. REMOVE it from all other domains
+
+A rule about IMP that appears in both OPS and SAF: if it is primarily an
+operational requirement (storage, handling), assign to OPS. If it is primarily
+a safety rule (contraindication, adverse reaction management), assign to SAF.
+When ambiguous: assign to the domain whose section_map contained the primary
+source text.
+
+Output format:
+{
+  "cross_domain_removals": [
+    {
+      "removed_kri_id": "...",
+      "removed_from_domain": "...",
+      "kept_in_domain": "...",
+      "kept_kri_id": "...",
+      "reason": "one sentence explanation"
+    }
+  ]
+}
+
+If no cross-domain duplicates found, return: { "cross_domain_removals": [] }
+```
+
+**Save output**: Apply removals to each affected domain's `raw_{CATEGORY}.json`. Append cross-domain removals to `dedup_report.json`.
+
+---
+
+## Phase 2.7 — Coverage Audit (Orphan Detection)
+
+Ensures every verifiable protocol rule ends up in at least one domain. Runs after Phase 2.5 (all domains clean and deduplicated).
+
+---
+
+## Step E1 — Build Coverage Index
+
+**Purpose**: Identify protocol sections that have no KRI pointing to them.
+
+**Implementation**:
+```python
+import json, re, os
+
+def build_coverage_index(out_dir, manifest_path):
+    # Load all domain KRIs
+    all_kris = []
+    for cat in ["SOA", "ELIG", "SAF", "END", "OPS"]:
+        path = os.path.join(out_dir, f"raw_{cat}.json")
+        if os.path.exists(path):
+            with open(path) as f:
+                data = json.load(f)
+            all_kris.extend(data if isinstance(data, list) else data.get("kris", []))
+
+    # Extract section numbers cited in protocol_reference fields
+    # protocol_reference format: "Section X.X, Page N: \"quote\""
+    covered_sections = set()
+    for k in all_kris:
+        ref = k.get("protocol_reference") or ""
+        m = re.search(r'Section\s+([\d.]+)', ref, re.IGNORECASE)
+        if m:
+            covered_sections.add(m.group(1))
+
+    # Load manifest TOC sections
+    with open(manifest_path) as f:
+        manifest = json.load(f)
+    all_toc_sections = set()
+    for domain_sections in manifest.get("section_map", {}).values():
+        for s in domain_sections:
+            if s.get("section_number"):
+                all_toc_sections.add(s["section_number"])
+
+    uncovered = all_toc_sections - covered_sections
+    return {"covered": sorted(covered_sections), "uncovered": sorted(uncovered)}
+```
+
+---
+
+## Step E2 — Gap Classification
+
+**Purpose**: Determine which uncovered sections contain verifiable rules (vs. pure narrative).
+
+**Prompt** (one LLM call per uncovered section, or batch in groups of 5):
+```
+Classify the following protocol section(s) for the Coverage Audit.
+Protocol: {protocol_id}
+
+SECTION {section_number}: {section_title}
+TEXT:
+{section_text}
+
+Does this section contain at least one verifiable clinical requirement — a rule or
+condition that a CRA could check as YES or NO?
+
+A "verifiable requirement" is any:
+- Specific threshold, timing window, duration, or quantity
+- Process step that must be performed or documented
+- Condition that must be met or absent
+- Obligation on a person (investigator, CRA, sponsor, participant)
+
+Classify as exactly one of:
+- HAS_RULES: contains ≥1 verifiable requirement not captured elsewhere
+- NARRATIVE_ONLY: background, rationale, scientific context, introductory text only
+- REFERENCE_ONLY: cross-references to other documents or sections, appendix headers
+
+Return JSON: { "section_number": "X.X", "classification": "HAS_RULES|NARRATIVE_ONLY|REFERENCE_ONLY", "rationale": "one sentence" }
+```
+
+---
+
+## Step E3 — Orphan Extraction
+
+**Purpose**: Extract KRIs from uncovered `HAS_RULES` sections.
+
+**Prompt**:
+```
+Extract KRIs from an uncovered protocol section.
+Protocol: {protocol_id}
+
+This section was identified in the Coverage Audit as containing verifiable rules
+that have NOT been captured in any existing domain KRI list.
+
+SECTION TEXT:
+{section_text}
+
+EXISTING KRIs (already captured — do NOT re-extract):
+{all_existing_kris_summary}
+
+TASK:
+Extract only net-new KRIs — rules present in this section not already covered above.
+Apply full atomization: each KRI = one independently verifiable binary condition.
+For each KRI, suggest the most appropriate domain:
+  SOA | ELIG | SAF | END | OPS
+
+Add a field "suggested_domain" to each KRI object.
+
+Return ONLY a JSON array (empty [] if no new rules found).
+```
+
+**Save output**: `{out_dir}/raw_ORPHANS.json`
+
+---
+
+## Step E4 — Orphan Integration
+
+**Purpose**: Assign orphan KRIs to their domains and merge into the final domain lists.
+
+**Steps**:
+1. Load `raw_ORPHANS.json`
+2. For each orphan: accept the `suggested_domain` (or override based on context)
+3. Assign the correct `category_id` and `category_label`
+4. Generate a new KRI ID in the correct domain's sequence
+5. Append to the appropriate `raw_{CATEGORY}.json`
+6. Save assignment log to `{out_dir}/orphan_report.json`
+
+**Save output**: Updated `raw_{CATEGORY}.json` files + `orphan_report.json`.
+
+---
+
+**Save output**: `{out_dir}/raw_{CATEGORY}.json` (per domain, final)
 
 ---
 
