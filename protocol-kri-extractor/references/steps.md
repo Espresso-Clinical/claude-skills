@@ -422,11 +422,123 @@ Log all corrections in `{out_dir}/ontology_corrections.json` for audit trail.
 
 ---
 
-## Step 2 — KRI Extraction (per category)
+## Step 1C — Deterministic Footnote Mapping (no LLM)
 
-**Purpose**: Extract all KRIs for one domain category. Run 5 times (once per category).
+**Purpose**: Build a fully deterministic map of footnote superscripts to procedure × visit cells. Zero LLM calls — uses only PDF character geometry and Camelot cell text parsing.
+
+**Why this step exists**: The SoA table contains superscript footnote numbers in cells (e.g., X¹⁰, X¹³·¹⁴). These tiny numbers are the ONLY link between a cell and its footnote text. Without deterministic extraction, the LLM must guess which footnotes belong where — causing ~20% error rate.
+
+**Implementation**:
+```python
+import sys
+sys.path.insert(0, "/path/to/scripts")
+from footnote_mapper import build_footnote_map
+
+result = build_footnote_map(
+    pdf_path="protocol.pdf",
+    soa_pages=[24],          # SoA table page(s)
+    fn_pages=range(25, 30),  # Footnote pages (after table)
+    out_dir="{out_dir}/"
+)
+```
+
+**What it produces** (`{out_dir}/footnote_map.json`):
+```json
+{
+  "footnote_texts": {"1": "verbatim text...", "10": "On treatment days..."},
+  "procedure_footnotes": {
+    "Vital signs": {
+      "procedure_level": [4],
+      "visits": {
+        "V1": {"mark": "X", "cell_footnotes": [10], "effective_footnotes": [4, 10]},
+        "V2": {"mark": "X", "cell_footnotes": [10], "effective_footnotes": [4, 10]}
+      }
+    }
+  },
+  "footnote_usage": {"10": [{"procedure": "Vital signs", "visits": ["V1","V2"], "source": "cell_level"}]},
+  "validation": {"orphan_in_map": [], "orphan_in_text": [28, 29]}
+}
+```
+
+**How the SOA extraction uses this map**: In Step 2 (SOA KRI extraction), the LLM prompt receives `footnote_map.json` instead of raw footnote text. The prompt says:
+```
+FOOTNOTE MAP (deterministic — do NOT infer or guess footnote associations):
+{footnote_map_json}
+
+For each procedure × visit KRI, use ONLY the footnotes listed in that cell's
+"effective_footnotes" array. Do not add footnotes that are not in the map.
+```
+
+**Save output**: `{out_dir}/footnote_map.json`
+
+---
+
+## Step 2 — KRI Extraction (per category, multi-model)
+
+**Purpose**: Extract all KRIs for one domain category using competing models.
 
 **PDF pages to read**: Pages from `manifest.section_map[CATEGORY]` entries.
+
+**Multi-model extraction process:**
+
+For each domain, run TWO sets of agents in parallel:
+
+**Set A — Claude agents (5 agents via Claude Code subagents):**
+Standard extraction using the prompts below. Each agent runs as a Claude subagent with slightly different temperature/sampling.
+
+**Set B — Gemini agents (5 agents via `scripts/gemini_extract.py`):**
+```python
+from gemini_extract import run_gemini_extraction, save_gemini_results
+
+results = run_gemini_extraction(
+    domain="{CATEGORY}",
+    extraction_prompt=prompt_text,  # Same prompt as Claude agents
+    n_agents=5,
+)
+save_gemini_results(results, out_dir, "{CATEGORY}")
+```
+
+**Adjudication (after both sets complete) — consensus-based, per domain:**
+
+Merge all 10 agent outputs (5 Claude + 5 Gemini). For each unique KRI found across agents, count how many agents produced it (match by semantic similarity of `rule_for_llm`):
+
+| Agent consensus | Action |
+|---|---|
+| **7–10 agents** found it | **Auto-approve** — goes directly into the domain's golden set |
+| **4–6 agents** found it | **Verify against protocol text.** Then present to user in a decision table (see format below). User decides approve/reject for each. |
+| **1–3 agents** found it | **Auto-delete** — not enough consensus |
+
+**Decision table format (shown to user for 4–6 agent KRIs):**
+
+For each KRI in the 4–6 range, present:
+
+```
+┌──────────────┬─────────────────────────────────┬───────────────────┬──────────┬──────────────────────────────┬──────────┐
+│ KRI ID       │ KRI Name                        │ Agents            │ Verified │ Reference & Quote            │ Decision │
+├──────────────┼─────────────────────────────────┼───────────────────┼──────────┼──────────────────────────────┼──────────┤
+│ SAF-AE-007   │ SAE Reporting 48h Window        │ 5/10 (3C + 2G)   │ YES      │ Section 8.14, p.118 — "..."  │ ?        │
+│ SAF-STOP-003 │ CK >10x ULN Stopping Rule      │ 4/10 (2C + 2G)   │ YES      │ Section 8.5, p.105 — "..."   │ ?        │
+│ SAF-PREG-002 │ Male Partner Contraception      │ 6/10 (4C + 2G)   │ NO       │ Section 4.1, p.55 — "..."    │ ?        │
+└──────────────┴─────────────────────────────────┴───────────────────┴──────────┴──────────────────────────────┴──────────┘
+```
+
+Where:
+- **Agents**: total count + breakdown (e.g., "5/10 (3C + 2G)" = 3 Claude + 2 Gemini)
+- **Verified**: YES if the supporting quote was found verbatim on the cited protocol page via pdfplumber, NO otherwise
+- **Reference & Quote**: the `combined_ref` field (protocol reference + verbatim quote)
+- **Decision**: user fills in — approve or reject
+
+**Process per domain:**
+1. Run 10 agents → merge → apply consensus tiers
+2. Present the 4–6 tier decision table to the user
+3. **WAIT** for user approval/rejection on each row
+4. Apply user decisions
+5. Proceed to de-duplication within this domain
+6. Only then move to the next domain
+
+**Domain processing order**: SOA → ELIG → SAF → END → OPS (one at a time, user approval between each).
+
+Save adjudication results in `{out_dir}/{cat}_adjudication.json`.
 
 **KRI schema** (every KRI must match exactly):
 ```json
@@ -437,16 +549,23 @@ Log all corrections in `{out_dir}/ontology_corrections.json` for audit trail.
   "category_id": "SOA",
   "category_label": "Schedule of Activities",
   "rule_for_llm": "V1- Verify that [exact actionable check]",
-  "protocol_reference": "Section 9.2, Page 52: \"verbatim quote ≤30 words\"",
-  "additional_footnotes": "Footnote 10: verbatim text — or null"
+  "protocol_reference": "Section 9.2, p.52",
+  "supporting_quote": "Verbatim text from protocol — no outer quotes",
+  "combined_ref": "Section 9.2, p.52 — \"Verbatim text from protocol\"",
+  "additional_footnotes": "Footnote 10: verbatim text — or null",
+  "severity": "critical|major|minor"
 }
 ```
+
+**Atomicity rule**: Every KRI must be atomic — ONE verifiable check about ONE thing at ONE time point. Never combine multiple endpoints, analytes, procedures, or time points into a single KRI.
 
 **ID format by category**:
 - SOA: `SOA-{VISIT_CODE}-{NNN}` e.g. `SOA-S1-001`, `SOA-V1-001`, `SOA-CROSS-001`
 - ELIG: `ELIG-INC-{NNN}` and `ELIG-EXC-{NNN}`
 - SAF: `SAF-AE-{NNN}`, `SAF-ALLERGY-{NNN}`, `SAF-PREG-{NNN}`, `SAF-RM-{NNN}`, `SAF-STOP-{NNN}`
-- END: `END-PRI-{NNN}`, `END-KSEC-{NNN}`, `END-SEC-{NNN}`, `END-EXP-{NNN}`, `END-ASET-{NNN}`, `END-STAT-{NNN}`, `END-ICE-{NNN}`
+- END: `END-PRI-{NNN}` (primary), `END-KSEC-{NNN}` (key secondary), `END-SEC-{NNN}` (other secondary), `END-BIO-{NNN}` (biomarker), `END-HCRU-{NNN}` (health care resource utilization), `END-EXP-{NNN}` (exploratory)
+- STAT: `STAT-{NNN}` (statistical methods — primary model, Cox model, multiplicity, missing data, supplemental, MMRM, transformations, baseline)
+- GOV: `GOV-POP-{NNN}` (analysis populations), `GOV-INT-{NNN}` (interim analysis/alpha), `GOV-END-{NNN}` (study end), `GOV-DMC-{NNN}` (DMC rules)
 - OPS: `OPS-IMP-{NNN}`, `OPS-BLIND-{NNN}`, `OPS-RECS-{NNN}`, `OPS-COMP-{NNN}`
 
 ### 6-Step SOA Extraction Process
@@ -479,6 +598,9 @@ The SOA extraction follows a strict 6-step process using the Camelot CSV as grou
 **Step SOA-6 — Self-Verification**: Cross-check that every X cell in the Camelot CSV has a corresponding KRI. Report: `N/N cells covered = 100%`. Flag any gaps.
 
 ### SOA prompt
+
+**ATOMICITY**: One procedure × one visit = one KRI. Never combine multiple procedures or multiple visits into a single KRI.
+
 ```
 Extract Schedule of Activities KRIs for the {EPOCH} epoch.
 Protocol: {protocol_id}
@@ -487,11 +609,74 @@ Visits in scope: {visit_ids}
 ONTOLOGY VISITS:
 {visits_json}
 
-ONTOLOGY FOOTNOTES:
-{footnotes_json}
+FOOTNOTE MAP (deterministic — DO NOT infer or guess footnote associations):
+{footnote_map_json}
 
-PROTOCOL TEXT:
+This map was built deterministically from PDF character geometry and cell text.
+It is the ONLY source of truth for which footnotes belong to which procedure × visit cells.
+- For each procedure × visit, use ONLY the footnotes listed in that cell's "effective_footnotes" array
+- Do NOT add footnotes that are not in the map for that cell
+- Do NOT remove footnotes that are in the map
+- The "footnote_texts" dict in the map contains the verbatim text of every footnote
+
+PROTOCOL TEXT (SoA table + footnote pages):
 {section_text}
+
+══════════════════════════════════════════════════════════════════
+MANDATORY — protocol_reference FORMAT RULES (NO EXCEPTIONS)
+══════════════════════════════════════════════════════════════════
+There are exactly THREE valid formats for protocol_reference in SOA KRIs.
+Use the correct one based on the KRI type:
+
+TYPE A — Procedure FROM the SoA table WITH a footnote:
+  "Schedule of Activities, Footnote N, p.X-p.Y"
+  Where N = the footnote number (from the FOOTNOTE MAP above)
+  Where p.X-p.Y = the FULL page range covering the SoA table AND all footnote pages
+                  (e.g. "p.24-p.29" — NOT individual footnote pages like "p.27")
+
+TYPE B — Procedure FROM the SoA table WITHOUT a footnote:
+  "Schedule of Activities, p.X-p.Y"
+  (same full page range, no Footnote N)
+
+TYPE C — Non-table KRI (from protocol BODY TEXT outside the SoA table, e.g. dosing section):
+  "Section N.N, p.Z"
+  (exact section number + individual page where the text appears)
+
+FORBIDDEN (will cause Step 3D failure):
+  ✗ Do NOT fabricate a Section number for the SoA table (e.g. "Section 3.2.1, p.24")
+    — the SoA table has no section number → use "Schedule of Activities"
+  ✗ Do NOT cite a single footnote page (e.g. "p.27") — always use the full range
+  ✗ Do NOT use a Type C format for a table-derived KRI
+  ✗ Do NOT cite a page outside the SoA table+footnote range for table-derived KRIs
+
+══════════════════════════════════════════════════════════════════
+MANDATORY — supporting_quote FORMAT RULES (NO EXCEPTIONS)
+══════════════════════════════════════════════════════════════════
+- For Type A KRIs: the supporting_quote MUST be a verbatim excerpt from the SPECIFIC
+  footnote text (found in footnote_texts[N] in the FOOTNOTE MAP above)
+  → It must be a substring of the actual footnote text, verified character-for-character
+  → It must NOT come from the table grid, from another footnote, or from body text
+  → Maximum 30 words; choose the most relevant sentence(s) for this KRI's specific topic
+
+- For Type B KRIs (no footnote): the supporting_quote must be a verbatim excerpt from
+  the SoA table page itself (procedure row label, visit header, or surrounding text)
+
+- For Type C KRIs (body text): the supporting_quote must be a verbatim excerpt from
+  the cited body text section
+
+- TOPIC-SPECIFIC QUOTES (CRITICAL): When a footnote covers multiple distinct topics
+  (fasting, dosing window, procedure order, lab timing, etc.), and your KRI is about
+  ONE specific topic within that footnote — quote the SPECIFIC sentence(s) about that
+  topic. NEVER copy the first 25 words of a multi-topic footnote for all KRIs under it.
+  Each KRI gets the part of the footnote relevant to its own specific check.
+
+- NEVER start or end supporting_quote with a " character
+  (combined_ref adds its own surrounding quotes — do not double-wrap)
+- NEVER include the footnote number as a prefix in the quote
+  (e.g. raw PDF shows "13 Urinalysis..." → strip the "13 " → quote starts "Urinalysis...")
+- NEVER produce duplicate page numbers (e.g. "p.27, p.27" is wrong)
+
+══════════════════════════════════════════════════════════════════
 
 EXTRACTION RULES:
 - One KRI per procedure × visit cell where the procedure is required
@@ -514,6 +699,8 @@ EXTRACTION RULES:
   capture both explicitly — do not collapse into "medications" alone
 - Stability windows: if concomitant therapy must be stable for N weeks/months prior,
   include the stability duration in the rule
+- Severity: "critical" for IMP administration, treatment compliance, consent.
+  "major" for labs, vitals, questionnaires. "minor" for administrative procedures.
 - Visit window KRIs (MANDATORY — every visit and screening):
   For EVERY visit in the SoA table — including all screening visits (S-I, S-II, etc.),
   all treatment visits (V1, V2, V3, etc.), and all follow-up visits (V4, V5, V6/EOS, etc.)
@@ -538,6 +725,9 @@ Return ONLY a JSON array starting with [ and ending with ]
 ```
 
 ### ELIG prompt
+
+**ATOMICITY**: One criterion or sub-criterion = one KRI. Multi-part criteria (e.g. 14a-14k) must produce one KRI per letter.
+
 ```
 Extract Eligibility KRIs from this protocol section.
 Protocol: {protocol_id}
@@ -562,12 +752,40 @@ Return ONLY a JSON array
 ```
 
 ### SAF prompt
+
+**ATOMICITY**: One reporting rule, one stopping rule, one emergency protocol = one KRI. Never combine AE reporting + SAE reporting into one KRI.
+
 ```
 Extract Safety & Toxicity KRIs from this protocol section.
 Protocol: {protocol_id}
 
 PROTOCOL TEXT:
 {section_text}
+
+══════════════════════════════════════════════════════════════════
+MANDATORY — SAF DOMAIN BOUNDARY (read before extracting anything)
+══════════════════════════════════════════════════════════════════
+SAF contains ONLY rules about:
+  ✓ Numeric safety thresholds and the required clinical response when exceeded
+    (e.g. CK >5× ULN → stop IP; TG ≥600 mg/dL → unscheduled visit; AST/ALT ≥3× ULN → workup)
+  ✓ AE/SAE collection windows and reporting timelines (report within 24h/48h to sponsor)
+  ✓ IP stopping rules and dose discontinuation triggers
+  ✓ Emergency/rescue protocols with exact drug names and doses
+  ✓ Causality assessment requirements
+  ✓ Pregnancy-related safety follow-up (EDP reporting, neonatal death, partner exposure)
+  ✓ Dose modification rules and their triggers (e.g. IP frequency change after confirmed LDL-C)
+
+SAF does NOT contain — do not extract these into SAF:
+  ✗ "Procedure X was collected at Visit Y" → belongs in SOA
+  ✗ Visit timing windows → belongs in SOA check-in KRI
+  ✗ How to perform a measurement (position, technique, duration) → belongs in OPS
+  ✗ Equipment standardization (same arm, same cuff) → belongs in OPS
+  ✗ Sample tube type or processing steps → belongs in OPS
+  ✗ IRT registration, record-keeping, IP storage → belongs in OPS
+
+SELF-CHECK before adding each KRI: ask "Is this about a safety THRESHOLD or REPORTING OBLIGATION, 
+or is it about WHEN/HOW something is done?" If when/how → do not add to SAF.
+══════════════════════════════════════════════════════════════════
 
 EXTRACTION RULES:
 - Cover: AE/SAE collection windows, reporting timelines (24h, 48h), allergic reaction 
@@ -584,34 +802,195 @@ EXTRACTION RULES:
 Return ONLY a JSON array
 ```
 
-### END prompt
+### END prompt (THREE sub-categories: Endpoints, Statistics, Governance)
+
+**IMPORTANT — Atomicity**: Every endpoint, every analyte, every statistical method, and every governance rule gets its own separate KRI. Never combine multiple endpoints or multiple analytes into one KRI. If the protocol lists 15 secondary endpoints, produce 15 KRIs. If it lists 13 biomarker analytes, produce 13 KRIs.
+
+**Run the END extraction in THREE passes** to ensure complete coverage:
+
+**Pass 1 — Endpoint Definitions (Sections 2.x / Objectives & Endpoints)**:
 ```
-Extract Endpoints & Statistics KRIs from this protocol section.
+Extract Endpoint Definition KRIs from this protocol section.
 Protocol: {protocol_id}
 
 PROTOCOL TEXT:
 {section_text}
 
-EXTRACTION RULES:
-- Order: primary → key secondary → secondary → exploratory → ICEs → analysis sets → statistics
-- One KRI per endpoint, per ICE type, per analysis set definition
-- Analysis sets: use exact protocol definitions
-  (e.g. ITT = ALL randomized, not just ≥1 dose)
-- Statistical rules: ANCOVA covariates, gatekeeping sequence, alpha levels, 
-  imputation strategy, interim analysis trigger criteria
-- Baseline definitions: general (Day 0 pre-dose) AND endpoint-specific if different
-- ADP-NRS calculation method if applicable
+EXTRACTION RULES — ENDPOINT DEFINITIONS:
+You MUST create ONE SEPARATE KRI for EACH endpoint listed in the protocol.
+Do NOT combine multiple endpoints into one KRI. Do NOT summarize a list of endpoints.
+Every single bullet point, every single analyte, every single composite definition = its own KRI.
+
+- PRIMARY ENDPOINT: One KRI with exact composite definition, time-from-randomization language,
+  and adjudication requirement. kri_id: END-PRI-001. severity: critical.
+
+- KEY SECONDARY ENDPOINTS: One SEPARATE KRI per distinct key secondary endpoint.
+  Each composite endpoint definition is separate. Even if they share a section header,
+  decompose them into individual KRIs.
+  kri_id: END-KSEC-001, END-KSEC-002, etc. severity: critical.
+
+- OTHER SECONDARY / CLINICAL ENDPOINTS: One SEPARATE KRI per individual endpoint.
+  Break out every item in the list: CV death, any MI (fatal+non-fatal), fatal MI,
+  non-fatal MI, any stroke, fatal stroke, non-fatal stroke, hospitalization for UA,
+  hospitalization for CHF, coronary revascularization, CABG, PCI, arterial
+  revascularization, all-cause death — each one = one KRI.
+  kri_id: END-SEC-001, END-SEC-002, etc. severity: major.
+
+- BIOMARKER ENDPOINTS: One SEPARATE KRI per analyte × measurement type.
+  If protocol says "percent change and nominal change in LDL-C at Week 14, and
+  percent change to last available" → that is 3 KRIs for LDL-C alone.
+  If protocol lists 13 analytes for percent change at Week 14 → 13 KRIs.
+  Include the exact visit/week number and measurement method (e.g. "direct measurement").
+  kri_id: END-BIO-001, END-BIO-002, etc. severity: major.
+
+- HCRU (Health Care Resource Utilization) ENDPOINTS: One SEPARATE KRI per HCRU metric.
+  All-cause hospitalizations, CV hospitalizations, ER visits, physician office visits,
+  outpatient rehab visits, 30-day readmissions (all-cause and CV separately) — each = one KRI.
+  Include the specific measures collected (diagnoses, length of stay, discharge disposition).
+  kri_id: END-HCRU-001, END-HCRU-002, etc. severity: minor.
+
+- EXPLORATORY ENDPOINTS: One SEPARATE KRI per exploratory endpoint if any.
+  kri_id: END-EXP-001, etc. severity: minor.
+
+Rule format: "Verify that [the endpoint] is [calculated/defined] as [exact definition from protocol]"
+Every KRI rule must specify: what is measured, from when (e.g. "time from randomization"),
+and the exact definition (e.g. "first adjudicated and confirmed occurrence of...").
+
+Return ONLY a JSON array
+```
+
+**Pass 2 — Statistical Methods (Section 9.x / Statistical Considerations)**:
+```
+Extract Statistical Method KRIs from this protocol section.
+Protocol: {protocol_id}
+
+PROTOCOL TEXT:
+{section_text}
+
+EXTRACTION RULES — STATISTICAL METHODS:
+One SEPARATE KRI per analysis method. Do NOT combine multiple methods into one KRI.
+
+- PRIMARY ANALYSIS MODEL: The exact test (e.g. log rank), stratification factors,
+  exact two-sided alpha level AFTER all adjustments. severity: critical.
+  kri_id: STAT-001
+
+- HAZARD RATIO MODEL: Estimation model (e.g. Cox proportional hazards), covariates,
+  stratification factors, confidence interval width, convergence fallback plan.
+  severity: critical. kri_id: STAT-002
+
+- MULTIPLICITY CONTROL: Gatekeeping procedure, fixed sequence testing, alpha allocation,
+  experimentwise Type 1 error control method, exact alpha values, testing sequence order.
+  severity: critical. kri_id: STAT-003
+
+- MISSING DATA / IMPUTATION: Method (e.g. multiple imputations for informative censoring),
+  which subjects qualify, conservative approach (e.g. imputation from placebo group only).
+  severity: major. kri_id: STAT-004
+
+- SUPPLEMENTAL / SENSITIVITY ANALYSES: Each gets its own KRI.
+  - Recurrent events method (e.g. Wei-Lin-Weissfeld) with covariates and stratification
+  - Adherent subject analysis: exact inclusion criteria (treatment duration, LDL-C threshold,
+    visit number), additional covariates (smoking, age, BMI, baseline history)
+  severity: major. kri_id: STAT-005, STAT-006, etc.
+
+- BIOMARKER ANALYSIS MODEL: MMRM or other model, list ALL fixed effects individually
+  (treatment, visit, baseline, interactions), covariance structure (unstructured),
+  estimation method (REML). severity: major. kri_id: STAT-007
+
+- DATA TRANSFORMATIONS: Which analytes are log-transformed, zero-value replacement method
+  (e.g. replace 0 with 0.0001). severity: major. kri_id: STAT-008
+
+- BASELINE DEFINITIONS: Exact calculation method for each type of baseline
+  (e.g. "mean of last two non-missing values prior to and including randomization date"
+  for biomarkers; "Day 0 pre-dose" for general). severity: major. kri_id: STAT-009
+
+Rule format: "Verify that [analysis/model] is [performed/fit] using [exact method]
+with [exact parameters] as [specified detail]"
+Include exact numeric values: alpha levels (0.04898, 0.001, 0.00002), thresholds (40 mg/dL),
+event counts (508, 288), percentages (75%), visit numbers (Visit 8, Visit 11).
+
+Return ONLY a JSON array
+```
+
+**Pass 3 — Governance (Sections 9.x / Interim Analysis, Study Design)**:
+```
+Extract Governance KRIs from this protocol section.
+Protocol: {protocol_id}
+
+PROTOCOL TEXT:
+{section_text}
+
+EXTRACTION RULES — GOVERNANCE:
+One SEPARATE KRI per governance rule.
+
+- ANALYSIS POPULATION DEFINITIONS: One SEPARATE KRI per analysis set.
+  FAS/ITT: exact inclusion criteria (e.g. "all randomized subjects regardless of
+  dose changes, adherence, or discontinuation"). severity: critical.
+  SAS: exact inclusion criteria (e.g. "received at least one dose of randomized
+  study medication"). severity: critical.
+  Any other analysis sets (per-protocol, mITT, etc.): one KRI each.
+  kri_id: GOV-POP-001, GOV-POP-002, etc.
+
+- INTERIM ANALYSIS TRIGGER: Exact conditions that must be met simultaneously.
+  Include event count thresholds (e.g. "75% of 508 subjects with primary endpoint event"),
+  which endpoints must be met, AND conditions. severity: critical.
+  kri_id: GOV-INT-001
+
+- ALPHA SPENDING: Method name (e.g. Heybittle-Peto), exact alpha value (e.g. 0.001),
+  adjustment to final analysis alpha (e.g. 0.00002). severity: critical.
+  kri_id: GOV-INT-002
+
+- STUDY END DEFINITION: Event count target, time-based criterion, whichever-occurs-later
+  logic. severity: major.
+  kri_id: GOV-END-001
+
+- DMC REVIEW RULES: If protocol specifies DMC review triggers (e.g. all-cause death
+  monitoring with Bonferroni adjustment), create a KRI. severity: major.
+  kri_id: GOV-DMC-001
+
+Rule format: "Verify that [population/trigger/rule] is [defined/performed] as [exact spec]"
 
 Return ONLY a JSON array
 ```
 
 ### OPS prompt
+
+**ATOMICITY**: One operational rule = one KRI. IMP storage, IMP handling, blinding, unblinding, retention — each is a separate KRI.
+
 ```
 Extract Operations & Compliance KRIs from this protocol section.
 Protocol: {protocol_id}
 
 PROTOCOL TEXT:
 {section_text}
+
+══════════════════════════════════════════════════════════════════
+MANDATORY — OPS DOMAIN BOUNDARY (read before extracting anything)
+══════════════════════════════════════════════════════════════════
+OPS contains:
+  ✓ How to perform assessments (measurement position, technique, duration)
+    e.g. "BP measured sitting, arm supported at heart level, after 5 min rest"
+    e.g. "Weight measured in indoor clothing without shoes"
+    e.g. "Pulse rate measured manually at brachial/radial artery for ≥30 seconds"
+  ✓ Longitudinal standardization (same arm, same cuff, same scale throughout study)
+  ✓ IP storage, handling, dispensing, accountability (temperatures, qualified staff, destruction)
+  ✓ Informed consent documentation, re-consent, surrogate consent
+  ✓ CRF corrections, record retention, delegation of authority logs
+  ✓ Regulatory compliance (IRB approvals, inspection notification, clinical holds)
+  ✓ IP compliance assessment and run-in compliance thresholds
+  ✓ Blinding procedures (one carton at a time, emergency unblinding documentation)
+  ✓ Measurement methodology rules that describe HOW (not WHEN) a procedure is performed
+
+OPS does NOT contain — do not extract these into OPS:
+  ✗ Visit timing windows → belongs in SOA check-in KRI (SOA owns all visit windows)
+  ✗ "Procedure X happens at Visit Y" → belongs in SOA
+  ✗ IRT registration at visits → belongs in SOA Contact IRT KRIs
+  ✗ Safety thresholds (CK >5× ULN, TG ≥600 mg/dL) → belongs in SAF
+  ✗ AE/SAE reporting timelines → belongs in SAF
+
+SELF-CHECK before adding each KRI: ask "Is this about HOW something is done (technique, 
+standardization, compliance), or is it about WHEN it's done (SOA) or WHAT threshold 
+triggers a response (SAF)?" Only HOW rules belong in OPS.
+══════════════════════════════════════════════════════════════════
 
 EXTRACTION RULES:
 - Cover: IMP storage conditions (exact temperatures), who handles IMP, who administers,
@@ -620,6 +999,8 @@ EXTRACTION RULES:
   regulatory approvals required, 21 CFR Part 11 compliance
 - Include exact temperature ranges
 - Include exact retention durations (years)
+- Measurement methodology: include ALL standardized measurement technique rules
+  (positioning, timing within visit, equipment requirements, longitudinal consistency rules)
 - Central analyses: cover all central review requirements — imaging (X-ray, MRI),
   lab, ECG — including verification that data was transmitted to the central facility
   and results were reviewed centrally
@@ -632,6 +1013,67 @@ Return ONLY a JSON array
 ```
 
 **Save output**: `{out_dir}/raw_{CATEGORY}.json`
+
+---
+
+## Step 4A-Dedup — Cross-Domain Duplicate Detection (mandatory after Step 4A)
+
+**Purpose**: After all domains are assembled into `extracted_kris.json`, remove KRIs that duplicate a KRI already owned by a higher-priority domain.
+
+**Ownership hierarchy** (higher = wins, lower = deleted if same clinical check exists):
+1. SOA — owns all "procedure happened at visit" and all "visit timing" checks
+2. SAF — owns all safety thresholds, reporting timelines, stopping rules
+3. OPS — owns all measurement technique and operational procedure rules
+
+**Process**:
+
+```python
+# Pseudocode for cross-domain dedup
+for each SAF/OPS kri:
+    # Rule 1: Does SOA already own this?
+    if "at visit" in kri.rule_for_llm or "per SOA" in kri.rule_for_llm or "per schedule" in kri.rule_for_llm:
+        flag as POTENTIAL_SOA_DUPLICATE
+    if any SOA kri covers the same procedure × visit:
+        delete this SAF/OPS kri, log to crossdomain_dedup_report.json
+
+    # Rule 2: Visit window in OPS?
+    if "visit window" in kri.rule_for_llm and kri.category == "OPS":
+        if matching SOA-CHECKIN-V[N] KRI exists:
+            delete this OPS kri, log to crossdomain_dedup_report.json
+
+# Within-domain semantic dedup
+for each domain:
+    for each pair of KRIs with similar rule_for_llm (>85% semantic overlap):
+        keep the one with richer description and more specific protocol reference
+        delete the other, log to crossdomain_dedup_report.json
+```
+
+**LLM prompt for cross-domain dedup review**:
+```
+You are reviewing assembled KRIs for cross-domain duplicates.
+
+DOMAIN OWNERSHIP RULES:
+- SOA owns: "Procedure X was performed at Visit Y", visit timing windows, lab scheduling by visit
+- SAF owns: safety thresholds, AE/SAE reporting timelines, stopping rules
+- OPS owns: measurement technique, IP handling, documentation procedures
+
+KRIs TO REVIEW (non-SOA):
+{non_soa_kris}
+
+SOA KRIs (reference — these own visit-level procedure checks):
+{soa_kri_names_and_rules}
+
+For each non-SOA KRI, determine:
+1. Is this a duplicate of a SOA KRI (same visit-level procedure check)?
+2. Is this a duplicate of another KRI in the same domain?
+
+Return JSON array of duplicates to delete:
+[{"delete_id": "SAF-xxx", "duplicate_of": "SOA-xxx", "reason": "SOA already checks this procedure at this visit"}]
+```
+
+**Save**: `{out_dir}/crossdomain_dedup_report.json`
+
+Apply all deletions, then re-save `extracted_kris.json` and re-run Step 4A Excel generation.
 
 ---
 
@@ -983,31 +1425,25 @@ def assemble(out_dir, manifest_path):
 ### Excel output (always generate alongside JSON)
 
 After assembling `extracted_kris.json`, also generate `Extracted_KRIs.xlsx` using openpyxl.
-The Excel workbook must have **5 sheets** matching the golden set format:
+The Excel workbook has one sheet per domain (SOA, ELIG, SAF, END, OPS, NDEF) plus a Summary sheet.
 
-| Sheet name | Category | Columns |
-|---|---|---|
-| SOA | Schedule of Activities | KRI Name, Description, category, Rule to Check- for LLM, Referance, Additional Footnotes |
-| ELIGIBILITY | Eligibility | KRI Name, Description, category, Referance, Rule to Check- for LLM |
-| SAF&TOX | Safety & Toxicity | KRI Name, Description, category, Referance, Rule to Check- for LLM |
-| END&STAT | Endpoints & Statistics | KRI Name, Description, Category, Referance, Rule to Check for LLM |
-| OPE&COM | Operations & Compliance | KRI Name, Description, Category, Referance, Rule to Check for LLM |
+**Exact column structure — identical for ALL domain sheets, no deviations:**
 
-**Note**: SOA has 6 columns (includes "Additional Footnotes"), all others have 5.
-The column ORDER matters — SOA puts "Rule" before "Referance", other sheets put "Referance" before "Rule".
+| Column | Field | Width |
+|--------|-------|-------|
+| KRI ID | `kri_id` | 16 |
+| Category | `category_label` | 28 |
+| KRI Name | `kri_name` | 34 |
+| Description | `description` | 52 |
+| Rule for LLM | `rule_for_llm` | 60 |
+| Protocol Reference & Quote | `combined_ref` | 90 |
+
+**No "Domain" column.** No separate "Protocol Reference" column. No separate "Supporting Quote" column. The `combined_ref` field is the single source for the last column.
 
 Formatting:
-- Blue header row with white bold text, frozen at row 1
-- Text wrapping enabled on all cells
-- Column widths: ~35 for name, ~50 for description, ~20 for category, ~55 for rule, ~45 for reference
-
-Map KRI fields to columns:
-- "KRI Name" ← `kri_name` (or `kri_id` if name is missing)
-- "Description" ← `description`
-- "category" ← category label (e.g. "Schedule of Activities")
-- "Rule to Check- for LLM" ← `rule_for_llm`
-- "Referance" ← `protocol_reference`
-- "Additional Footnotes" ← `additional_footnotes` (SOA only, null → empty)
+- Dark blue header row (1F4E79) with white bold text, frozen at row 1
+- Text wrapping enabled on all cells, thin borders
+- Domain-specific row colors: SOA=D9EAD3, ELIG=FCE5CD, SAF=F4CCCC, END=CFE2F3, OPS=EAD1DC, NDEF=FFF2CC
 
 ```python
 import openpyxl

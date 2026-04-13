@@ -262,20 +262,43 @@ def parse_soa_table(table):
         if not raw_proc:
             continue
 
-        # Strip trailing footnote numbers (e.g., "Informed Consents1" → "Informed Consents")
-        footnote_match = re.search(r"(\d+)$", raw_proc)
-        footnote_num = footnote_match.group(1) if footnote_match else None
-        proc_name = re.sub(r"\d+$", "", raw_proc).strip()
+        # Extract trailing footnote numbers (e.g., "Informed Consents1" → fn [1])
+        # Handles: single (3), multi-digit (10), compound (3,14), dot-separated (13·14)
+        footnote_match = re.search(r"((?:\d+[,·])*\d+)\s*$", raw_proc)
+        footnote_nums_raw = footnote_match.group(1) if footnote_match else None
+        footnote_num = footnote_nums_raw  # preserve raw for downstream use
+        if footnote_nums_raw:
+            proc_name = raw_proc[:footnote_match.start()].strip()
+            # Safety: if stripping leaves empty, keep original (e.g., "Phase 2" → "2" is not a footnote)
+            if not proc_name:
+                proc_name = raw_proc
+                footnote_num = None
+        else:
+            proc_name = raw_proc
 
-        # Skip section headers (no X marks in any column)
+        # Parse each cell — match X/S marks with optional trailing footnote numbers
+        # "X" → mark, "X10" → mark + fn[10], "X13,14" → mark + fn[13,14]
         has_any_x = False
         visits_present = []
+        cell_footnotes_map = {}  # visit_id → list of footnote numbers from cell
         for visit in visits:
-            cell = str(df.iloc[row_idx][visit["column_index"]]).strip().upper()
-            if cell == "X":
+            cell = str(df.iloc[row_idx][visit["column_index"]]).strip()
+            cell_upper = cell.upper().replace('\n', ' ').strip()
+            cell_match = re.match(r'^([XS])\s*([\d,·\s]*)$', cell_upper, re.I)
+            if cell_match:
                 has_any_x = True
                 visits_present.append(visit["visit_id"])
                 matrix[(proc_name, visit["visit_id"])] = "X"
+                # Extract cell-level footnote numbers
+                fn_str = cell_match.group(2).strip()
+                if fn_str:
+                    fn_parts = re.split(r'[,·\s]+', fn_str)
+                    cell_fns = [int(p) for p in fn_parts if p.isdigit()]
+                    cell_footnotes_map[visit["visit_id"]] = cell_fns
+            elif cell_upper == "X" or cell_upper == "S":
+                has_any_x = True
+                visits_present.append(visit["visit_id"])
+                matrix[(proc_name, visit["visit_id"])] = cell_upper
             else:
                 matrix[(proc_name, visit["visit_id"])] = ""
 
@@ -287,6 +310,7 @@ def parse_soa_table(table):
             "footnote_number": footnote_num,
             "visits_present": visits_present,
             "visit_count": len(visits_present),
+            "cell_footnotes": cell_footnotes_map,  # {visit_id: [fn_nums]}
         })
 
     return {
