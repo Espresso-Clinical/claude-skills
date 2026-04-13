@@ -192,7 +192,7 @@ if __name__ == "__main__":
 
     print(f"\n{'='*60}")
     print(f"Gemini KRI Extraction — {args.domain} domain")
-    print(f"Model: {load_gemini_model()}")
+    print("Model: [configured]")
     print(f"Agents: {args.agents}")
     print(f"{'='*60}\n")
 
