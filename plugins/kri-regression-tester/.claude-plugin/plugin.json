@@ -1,0 +1,14 @@
+{
+  "name": "kri-regression-tester",
+  "description": "Regression testing for KRI golden sets — detects when extractor skill updates break approved outputs",
+  "version": "1.0.0",
+  "author": {
+    "name": "Espresso Clinical"
+  },
+  "skills": [
+    {
+      "name": "kri-regression-tester",
+      "path": "./skills/kri-regression-tester"
+    }
+  ]
+}

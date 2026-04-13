@@ -577,6 +577,35 @@ Only Gemini is required. OpenAI and xAI are optional — the skill gracefully fa
 
 ---
 
+## Freezing a Golden Set (Regression Vault)
+
+After a full extraction run is complete, validated (Step 3D passes at 100%), assembled (Step 4A), and the user has reviewed and approved the golden set — **ask the user if they want to freeze it in the regression vault.**
+
+The regression vault preserves approved golden sets so that future skill updates can be checked for regressions. Each frozen golden set is immutable and represents ground truth for that protocol.
+
+**When to ask:** After Step 4A assembly is complete and the user has confirmed they are satisfied with the results. Say something like:
+
+> "The golden set for [protocol] is complete and validated. Would you like to freeze it in the regression vault? This preserves it so we can detect if future skill updates break anything."
+
+**If the user says yes**, use the `kri-regression-tester` skill's freeze operation. Specifically, run:
+
+```bash
+python ~/.claude/skills-repo/kri-regression-tester/scripts/freeze.py \
+  --source <run_directory> \
+  --vault ~/Documents/kri-regression-vault \
+  --protocol-id <protocol_id> \
+  --protocol-name "<protocol_name>" \
+  --skill-path ~/.claude/skills-repo/protocol-kri-extractor/SKILL.md
+```
+
+This copies all artifacts (extracted_kris.json, Extracted_KRIs.xlsx, raw domain files, manifest, ontology, footnote map, verification reports, etc.) into `~/Documents/kri-regression-vault/<protocol_id>/` alongside a snapshot of the current SKILL.md.
+
+**If the user says no**, move on. The golden set remains in its run directory but is not vault-protected.
+
+**At the start of any session where this skill will be edited**, run the regression test first to establish a clean baseline. Use the `kri-regression-tester` skill for this.
+
+---
+
 ## Reference files
 
 - `references/steps.md` — detailed LLM prompt templates for each step
