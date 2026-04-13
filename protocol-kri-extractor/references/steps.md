@@ -23,6 +23,39 @@ You always return valid JSON with no markdown fences, no prose, no extra text.""
 
 ---
 
+## ⚠️ CITATION INTEGRITY RULES — MANDATORY FOR EVERY STEP
+
+These rules apply to every KRI in every domain, at every step of the pipeline. There are no exceptions.
+
+### Rule 1 — Zero fabrication
+**Never invent, synthesize, paraphrase, or reconstruct a quote.** The `supporting_quote` field must contain text copied character-by-character from the protocol PDF. If you cannot find the exact text in the PDF, the field must be empty — never filled with a plausible-sounding substitute.
+
+### Rule 2 — Verbatim means verbatim
+A verbatim quote is the exact sequence of words, punctuation, capitalisation, and spacing as it appears in the source document. Changing a single word — even to correct grammar, fix a typo, or improve clarity — makes it no longer verbatim. Copy the text as-is.
+
+### Rule 3 — The quote must support the KRI
+A verbatim quote is not valid just because it appears on the cited page. It must be the specific sentence(s) that directly mandate the monitoring rule described in `kri_name` and `description`. If the cited page contains relevant text but you used the wrong sentence, that is still an error. Find the sentence that actually creates the obligation.
+
+### Rule 4 — Quote and page reference must match
+The page number in `protocol_reference` must be the page where the quoted text physically appears in the PDF. If the quote is on p.63 but `protocol_reference` says p.65, that is an error — fix the page reference, not the quote.
+
+### Rule 5 — combined_ref construction
+`combined_ref` is always built as: `{protocol_reference} — "{supporting_quote}"`
+If `supporting_quote` is empty, `combined_ref` must also be empty (not just the reference).
+
+### Rule 6 — Mandatory post-extraction citation check
+After completing extraction for any domain, run a citation verification pass:
+1. For every KRI in that domain, read the cited page(s) from the PDF using pdfplumber
+2. Confirm the `supporting_quote` text appears verbatim on that page using a string search
+3. If the string search fails → the quote is wrong. Find the correct text or blank the field.
+4. Log all failures in `{out_dir}/citation_errors.json` before proceeding to deduplication
+
+This check is not optional. A domain with unchecked citations is not complete.
+
+---
+
+---
+
 ## Step 1A — Protocol Manifest
 
 **Purpose**: Read cover + TOC pages, produce `manifest.json`.
@@ -993,107 +1026,131 @@ If no cross-domain duplicates found, return: { "cross_domain_removals": [] }
 
 Ensures every verifiable protocol rule ends up in at least one domain. Runs after Phase 2.5 (all domains clean and deduplicated).
 
+### ⚠️ MANDATORY: Page-by-page sweep of the ENTIRE protocol
+
+The orphan sweep must scan **every page** of the protocol PDF from page 1 to the last page. It is not sufficient to check only TOC-referenced sections. The TOC does not list appendices, footnote pages, or inline tables that can contain binding monitoring rules. Any page not scanned is a potential missed KRI.
+
 ---
 
-## Step E1 — Build Coverage Index
+## Step E1 — Build Page Coverage Map
 
-**Purpose**: Identify protocol sections that have no KRI pointing to them.
+**Purpose**: Identify every page of the protocol that has NO KRI citing it.
 
 **Implementation**:
 ```python
-import json, re, os
+import json, re, os, pdfplumber
 
-def build_coverage_index(out_dir, manifest_path):
+def build_page_coverage_map(out_dir, pdf_path):
     # Load all domain KRIs
     all_kris = []
-    for cat in ["SOA", "ELIG", "SAF", "END", "OPS"]:
+    for cat in ["SOA", "ELIG", "SAF", "END", "OPS", "NDEF"]:
         path = os.path.join(out_dir, f"raw_{cat}.json")
         if os.path.exists(path):
             with open(path) as f:
                 data = json.load(f)
             all_kris.extend(data if isinstance(data, list) else data.get("kris", []))
 
-    # Extract section numbers cited in protocol_reference fields
-    # protocol_reference format: "Section X.X, Page N: \"quote\""
-    covered_sections = set()
+    # Extract all page numbers cited in protocol_reference fields
+    cited_pages = set()
     for k in all_kris:
         ref = k.get("protocol_reference") or ""
-        m = re.search(r'Section\s+([\d.]+)', ref, re.IGNORECASE)
-        if m:
-            covered_sections.add(m.group(1))
+        # Match patterns: "p.52", "p. 52", "Page 52", "Pages 52-53"
+        nums = re.findall(r'[Pp](?:age|ages|\.)\s*(\d+)', ref)
+        cited_pages.update(int(n) for n in nums)
+        # Also match bare numbers at end: "Section 6.4, p.52"
+        nums2 = re.findall(r',\s*p\.?\s*(\d+)', ref)
+        cited_pages.update(int(n) for n in nums2)
 
-    # Load manifest TOC sections
-    with open(manifest_path) as f:
-        manifest = json.load(f)
-    all_toc_sections = set()
-    for domain_sections in manifest.get("section_map", {}).values():
-        for s in domain_sections:
-            if s.get("section_number"):
-                all_toc_sections.add(s["section_number"])
+    # Get total page count from PDF
+    with pdfplumber.open(pdf_path) as pdf:
+        total_pages = len(pdf.pages)
 
-    uncovered = all_toc_sections - covered_sections
-    return {"covered": sorted(covered_sections), "uncovered": sorted(uncovered)}
+    all_pages = set(range(1, total_pages + 1))
+    uncited_pages = sorted(all_pages - cited_pages)
+    cited_sorted = sorted(cited_pages)
+
+    return {
+        "total_pages": total_pages,
+        "cited_pages": cited_sorted,
+        "cited_count": len(cited_pages),
+        "uncited_pages": uncited_pages,
+        "uncited_count": len(uncited_pages)
+    }
 ```
+
+**Save output**: `{out_dir}/page_coverage_map.json`
+
+**Critical**: If `uncited_count > 0`, every uncited page must be classified in Step E2 before proceeding. There is no acceptable reason to skip pages.
 
 ---
 
-## Step E2 — Gap Classification
+## Step E2 — Page Classification
 
-**Purpose**: Determine which uncovered sections contain verifiable rules (vs. pure narrative).
+**Purpose**: Read each uncited page and classify whether it contains verifiable monitoring rules.
 
-**Prompt** (one LLM call per uncovered section, or batch in groups of 5):
+**Read every uncited page** using pdfplumber. For each page, extract its full text and classify:
+
 ```
-Classify the following protocol section(s) for the Coverage Audit.
+Classify the following protocol page for the Orphan Detection sweep.
 Protocol: {protocol_id}
 
-SECTION {section_number}: {section_title}
-TEXT:
-{section_text}
+PAGE {page_number} FULL TEXT:
+{page_text}
 
-Does this section contain at least one verifiable clinical requirement — a rule or
-condition that a CRA could check as YES or NO?
+Does this page contain at least one verifiable clinical requirement — a rule or condition
+that a CRA could check as YES or NO — that is NOT already captured in the existing KRI set?
 
 A "verifiable requirement" is any:
 - Specific threshold, timing window, duration, or quantity
 - Process step that must be performed or documented
 - Condition that must be met or absent
-- Obligation on a person (investigator, CRA, sponsor, participant)
+- Obligation on a person (investigator, CRA, sponsor, subject)
+- Appendix criteria (diagnostic criteria, assessment tables, scoring rules)
 
 Classify as exactly one of:
-- HAS_RULES: contains ≥1 verifiable requirement not captured elsewhere
-- NARRATIVE_ONLY: background, rationale, scientific context, introductory text only
-- REFERENCE_ONLY: cross-references to other documents or sections, appendix headers
+- HAS_RULES: contains ≥1 verifiable requirement not yet captured — must be extracted
+- NARRATIVE_ONLY: background, rationale, objectives, scientific context only
+- REFERENCE_ONLY: bibliography, abbreviations list, TOC, amendment history only
+- STATS_ONLY: statistical methodology (ANCOVA, MMRM, sample size calculations) — not site-verifiable
 
-Return JSON: { "section_number": "X.X", "classification": "HAS_RULES|NARRATIVE_ONLY|REFERENCE_ONLY", "rationale": "one sentence" }
+Return JSON: { "page": N, "classification": "HAS_RULES|NARRATIVE_ONLY|REFERENCE_ONLY|STATS_ONLY", "rationale": "one sentence", "candidate_rules": ["brief description of each potential rule if HAS_RULES, else []"] }
 ```
+
+**Save output**: `{out_dir}/page_classifications.json` — one entry per uncited page.
 
 ---
 
 ## Step E3 — Orphan Extraction
 
-**Purpose**: Extract KRIs from uncovered `HAS_RULES` sections.
+**Purpose**: Extract KRIs from every page classified as `HAS_RULES`.
 
-**Prompt**:
+For each `HAS_RULES` page, run this extraction prompt:
+
 ```
-Extract KRIs from an uncovered protocol section.
+Extract KRIs from an uncovered protocol page.
 Protocol: {protocol_id}
 
-This section was identified in the Coverage Audit as containing verifiable rules
-that have NOT been captured in any existing domain KRI list.
+This page was identified in the Coverage Audit as containing verifiable rules
+that have NOT been captured in any existing domain KRI.
 
-SECTION TEXT:
-{section_text}
+PAGE {page_number} FULL TEXT:
+{page_text}
 
 EXISTING KRIs (already captured — do NOT re-extract):
 {all_existing_kris_summary}
 
 TASK:
-Extract only net-new KRIs — rules present in this section not already covered above.
+Extract only net-new KRIs — rules present on this page not already covered above.
 Apply full atomization: each KRI = one independently verifiable binary condition.
-For each KRI, suggest the most appropriate domain:
-  SOA | ELIG | SAF | END | OPS
 
-Add a field "suggested_domain" to each KRI object.
+⚠️ CITATION RULES (strictly enforced):
+- supporting_quote MUST be exact verbatim text from this page
+- Copy the text character-by-character — no paraphrasing, no synthesis
+- Verify the quote appears on this exact page before including it
+
+For each KRI, suggest the most appropriate domain: SOA | ELIG | SAF | END | OPS | NDEF
+
+Add "suggested_domain" and "source_page" fields to each KRI object.
 
 Return ONLY a JSON array (empty [] if no new rules found).
 ```
@@ -1111,10 +1168,13 @@ Return ONLY a JSON array (empty [] if no new rules found).
 2. For each orphan: accept the `suggested_domain` (or override based on context)
 3. Assign the correct `category_id` and `category_label`
 4. Generate a new KRI ID in the correct domain's sequence
-5. Append to the appropriate `raw_{CATEGORY}.json`
-6. Save assignment log to `{out_dir}/orphan_report.json`
+5. **Verify citation**: confirm the `supporting_quote` appears verbatim on the `source_page`
+6. Append to the appropriate `raw_{CATEGORY}.json`
+7. Save assignment log to `{out_dir}/orphan_report.json`
 
 **Save output**: Updated `raw_{CATEGORY}.json` files + `orphan_report.json`.
+
+**Completion check**: After Step E4, every page of the protocol must be accounted for in `page_classifications.json`. If any page is still unclassified, return to Step E2. The orphan sweep is not complete until every page has a classification.
 
 ---
 
