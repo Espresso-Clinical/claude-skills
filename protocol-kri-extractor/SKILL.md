@@ -105,7 +105,9 @@ The monitor maintains and checks this artifact checklist throughout execution:
 | 1C | `footnote_map.json` (with footnote-level orphan validation block) | |
 | 2 (per domain) | `raw_{DOMAIN}.json`, `{DOMAIN}_adjudication.json` | |
 | 2 (multi-model) | 5 Claude agent outputs + 5 Gemini agent outputs per domain | |
-| 2 (consensus) | Tier 1 auto-approved, Tier 2 decision table shown to user, Tier 3 auto-deleted | |
+| 2 (consensus) | Tier 1 auto-approved, Tier 2 decision table shown to user, Tier 3 → promotion pipeline (`{domain}_tier3_filtered.json`) | |
+| 2 (per-domain checkpoint) | `{domain}_manual_review_decisions.json` — user acceptance/rejection record for all T2 + promoted T3 KRIs | |
+| 2.5 (obligation inventory) | `{domain}_obligation_inventory.json` — all obligation sentences found, with KRI coverage check | |
 | **3.5** | **`orphan_scan_report.json` (primary section sweep + secondary page sweep + consolidation + cross-check + classification + user decisions + promoted orphans appended to `raw_{DOMAIN}.json`)** | |
 | 3A | `gaps_report.json` | |
 | 3A+ | Heuristics H1-H10 results | |
@@ -123,7 +125,7 @@ For Step 2, the monitor MUST verify:
 - Consensus tiers were correctly applied:
   - 7-10 agents → auto-approved (verify these went into the domain's KRI set)
   - 4-6 agents → decision table was presented to the user AND the user responded before proceeding
-  - 1-3 agents → auto-deleted (verify these were removed)
+  - 1-3 agents → Tier 3 promotion pipeline: coverage filter → verification agent → presented in the per-domain decision table as [T3-PROMOTED] rows → user accepted/rejected; NOT auto-deleted. Verify `{domain}_tier3_filtered.json` exists.
 - The domain processing order was sequential: SOA → ELIG → SAF → END → OPS
 - Each domain completed fully (including user approval of Tier 2) before the next domain began
 
@@ -369,6 +371,22 @@ The `kept_despite_similarity` section is mandatory — it records cases where tw
 
 ---
 
+### Cross-Section Merge Guard (MANDATORY — No Exceptions)
+
+Two KRIs from **different numbered protocol subsections** (e.g., §8.7 and §8.14.1) MUST NEVER be merged during de-duplication, even if they appear topically similar, use similar language, or relate to the same subject area.
+
+**The rule**: If `kri_a.protocol_reference` and `kri_b.protocol_reference` resolve to different numbered section identifiers (e.g., "Section 8.7" ≠ "Section 8.14.1"), the de-duplication agent is PROHIBITED from marking them as duplicates. Each section contains an independent protocol obligation and may encode a distinct, atomically verifiable rule.
+
+**Rationale**: A dose-reduction trigger in §5.4.1.1 and a visit frequency consequence in §6.4.5 may both relate to LDL-C, but they are different obligations — merging them silently destroys one verifiable rule. Similarly, a hospitalization definition in §8.7 and a hospitalization reporting timeline in §8.14 are different rules.
+
+**Implementation**:
+- Before proposing any merge, the de-duplication agent MUST check whether `section_a != section_b`.
+- If sections differ → the KRIs cannot be merged. They must appear as a `kept_despite_similarity` entry in `dedup_report.json` with reason: "Different protocol sections — merge prohibited by Cross-Section Merge Guard."
+- The guard applies to both intra-domain and cross-domain de-duplication passes.
+- A same-subsection merge (e.g., two KRIs both citing §8.14.1) is still subject to normal de-duplication rules.
+
+---
+
 ### END Domain — Three Mandatory Sub-Categories
 
 The END domain must produce KRIs in three sub-categories. All use `category_id: "END"` and `category_label: "Endpoints & Statistics"`.
@@ -485,6 +503,31 @@ For non-SOA categories, extraction uses one LLM call per category producing `raw
 - SAF: every reporting timeline, stopping rule, emergency protocol
 - END: **three sub-categories** — (1) one KRI per endpoint definition (primary, each key secondary, each other secondary individually, each biomarker analyte × measurement type, each HCRU metric), (2) one KRI per statistical method (primary model, hazard ratio model, multiplicity control, missing data, supplemental analyses, biomarker model, transformations, baseline definitions), (3) one KRI per governance rule (analysis populations, interim analysis triggers, alpha spending, study end definition)
 - OPS: IMP handling, blinding, records, compliance
+
+### Step 2.5 — Section Obligation Inventory (MANDATORY, runs after each domain extraction)
+
+After completing the 10-agent extraction for a domain (and before proceeding to Phase 3), run a **Section Obligation Inventory** for that domain's assigned protocol sections. This step catches obligations that all agents missed.
+
+**Process:**
+
+1. **Scan every sentence** in the domain's protocol sections for obligation markers:
+   - Hard obligations: "must", "shall", "is required to", "is prohibited"
+   - Temporal obligations: "within [N] hours/days/weeks", "no later than", "at least [N] days before"
+   - Submission obligations: "submitted to", "reported to", "notified", "communicated to"
+   - Definitional boundaries: "is defined as", "does not include", "is not [X] when", "excludes"
+   - Dose/threshold triggers: "if [condition], then [action]", "≤ [value]", "≥ [value]"
+
+2. **For each obligation sentence found**, check whether it is covered by an existing KRI's `supporting_quote` (via substring match after normalization).
+
+3. **Uncovered obligation sentences** → automatically promoted to **Tier 3** for processing through the Tier 3 Promotion Pipeline (see above). They enter Step T3-1 (Coverage Filter) immediately.
+
+4. **Artifact**: Save the full inventory — all obligation sentences, their coverage status (covered/uncovered), and the covering KRI ID if applicable — to `{domain}_obligation_inventory.json`.
+
+**Key principle**: This step is a mandatory safety net, not a replacement for the 10-agent extraction. Its purpose is to ensure that every sentence in the protocol that encodes a verifiable obligation has at least one KRI candidate in the system, even if the original agents had low confidence.
+
+**Artifact**: `{domain}_obligation_inventory.json`
+
+---
 
 ### Phase 3 — Validate (orphan scan + completeness + heuristics + full accuracy judging + consistency + mandatory full verbatim verification)
 
@@ -972,6 +1015,9 @@ Each pipeline run produces these files in the output directory:
 13. **No footnote number prefix in quotes**: Raw PDF has `"13 Urinalysis..."` — the `13` is a label, not content. Strip it. Quote starts with the text: `"Urinalysis: Dipstick..."`.
 14. **Script safety — always save**: Every script that modifies JSON must: (a) create a backup, (b) `json.dump(..., ensure_ascii=False)`, (c) print confirmation with record count.
 15. **Footnote associations are deterministic**: They come from `footnote_map.json` (Step 1C), NEVER from LLM inference. If the map says Vital Signs = Footnote 4, the KRI cites Footnote 4. Period.
+16. **Quote anchoring — one obligation per quote**: The `supporting_quote` must be the **shortest possible verbatim segment** from the protocol that anchors exactly ONE verifiable obligation. Never bundle multiple independent obligations into a single `supporting_quote`. If a sentence contains two independently verifiable rules (e.g., a dose definition AND a reporting timeline), split them into two KRIs with separate quotes. A quote that covers multiple obligations will be flagged during Step 3B accuracy judging for atomicity split. Long quotes (>200 characters) covering multiple clauses are automatically suspect — trim to the clause(s) that matter for this specific KRI's check.
+17. **Discard traceability — empty reason is a pipeline error**: Every discarded KRI (at any stage: Tier 3 pipeline, de-duplication, domain validation) MUST have a non-empty `reason` field in its discard record. The reason must either: (a) name the covering KRI ID (e.g., "Covered by SAF-AE-004 — same obligation, same section"), OR (b) clearly explain why the cited text does not constitute a valid, atomically verifiable obligation. An empty, null, or placeholder reason (e.g., "N/A", "see above") is a pipeline error that blocks the run. The Compliance Monitor must verify that all discard records across all artifacts (`{domain}_tier3_filtered.json`, `dedup_report.json`, validation logs) have non-empty reasons before allowing Phase 4 assembly.
+18. **Definitional rules are KRIs**: Protocol sentences that define inclusion/exclusion boundaries for clinical concepts are valid KRIs. A sentence of the form "X is defined as...", "X does not include Y when...", or "X is not considered Y unless..." encodes a verifiable rule — a site can deviate by applying the wrong definition. Extract one KRI per definitional sentence. Domain assignment: SAF for adverse event/safety definitions; OPS for operational definitions; ELIG for eligibility criteria definitions. Do NOT skip definitional rules on the assumption that they are "just context" — they are independently verifiable and sites do misapply them.
 
 ### SOA Domain — Reference and Quote Rules (MANDATORY, NO EXCEPTIONS)
 
@@ -1087,7 +1133,65 @@ save_gemini_results(results, out_dir, "END")
 
 Decision table shown to user for 4–6 tier KRIs includes: KRI ID, KRI Name, agent count with breakdown (e.g., "5/10 (3C + 2G)"), verified status, reference & quote, and a decision column.
 
-**Process is sequential per domain**: SOA → ELIG → SAF → END → OPS. Each domain completes its 10-agent extraction → merge → consensus tiers → user decision table → de-duplication BEFORE the next domain begins.
+**Process is sequential per domain**: SOA → ELIG → SAF → END → OPS. Each domain completes its 10-agent extraction → merge → consensus tiers → Tier 3 promotion pipeline → user decision table → de-duplication BEFORE the next domain begins.
+
+---
+
+### Tier 3 Promotion Pipeline (ADDITIVE — replaces silent auto-delete)
+
+KRIs found by only 1–3 agents (Tier 3) are NOT silently discarded. They enter a 3-step promotion pipeline before the per-domain decision table:
+
+**Step T3-1 — Coverage Filter**: Check whether the Tier 3 KRI's rule is already covered verbatim by an approved Tier 1 or Tier 2 KRI (same section + same obligation). If fully covered → discard with reason "Covered by [KRI_ID]". If not fully covered → advance to T3-2.
+
+**Step T3-2 — Verification Agent**: A dedicated verification agent reads the cited protocol section and answers: (a) Does the protocol text contain a real, verifiable obligation here? (b) Is it atomically separable from existing KRIs? (c) Provide a verbatim `supporting_quote`. If the answer to (a) or (b) is No → discard with explicit documented reason. If both are Yes → advance to T3-3.
+
+**Step T3-3 — Promote to Decision Table**: The KRI is added to the per-domain manual review decision table (see below) as a `[T3-PROMOTED]` row, alongside the Tier 2 KRIs. The user reviews and accepts or rejects it like any other KRI.
+
+**Artifact**: Save all Tier 3 KRIs and their disposition (promoted / discarded + reason) to `{domain}_tier3_filtered.json`.
+
+**CRITICAL**: A Tier 3 KRI MUST NEVER be discarded with an empty `reason` field. The reason must name the covering KRI ID (if covered) or clearly explain why the cited text does not constitute a valid, atomically verifiable obligation.
+
+---
+
+### Per-Domain Manual Review Checkpoint (MANDATORY BLOCKING GATE)
+
+After each domain's Tier 3 promotion pipeline completes, the pipeline **PAUSES** and presents the user with a consolidated decision table for ALL KRIs that require human review:
+
+- All **Tier 2** KRIs (4–6 agents)
+- All **T3-PROMOTED** KRIs from the Tier 3 pipeline
+
+The pipeline MUST NOT proceed to de-duplication for that domain until the user has made an explicit Accept / Reject / Edit decision for every row. The Compliance Monitor enforces this gate.
+
+**Decision table columns:**
+| Column | Content |
+|---|---|
+| KRI ID | Proposed ID (e.g., `SAF-AE-007`) |
+| Tier | `T2` or `T3-PROMOTED` |
+| KRI Name | Short descriptive name |
+| Agents | Count + breakdown (e.g., `5/10 (3C+2G)`) |
+| Protocol Ref | Section + page |
+| Supporting Quote | Verbatim excerpt (first 80 chars shown, expandable) |
+| View | "View in Protocol" button (see Interactive Review Table below) |
+| Decision | `Accept` / `Reject` / `Edit` |
+
+**Artifact**: Save all user decisions (including timestamps and any edited fields) to `{domain}_manual_review_decisions.json`. This file is the auditable record of every human decision in the extraction run.
+
+---
+
+### Interactive Review Table — Protocol View Integration
+
+The per-domain decision table is rendered as an **interactive HTML page** in the Preview application (`mcp__Claude_Preview__*`). Each row includes a **"View in Protocol"** button with the following behavior:
+
+1. **Opens** the protocol PDF text (via pdfplumber extraction of the cited page ± 1 page), or switches to an already-open view.
+2. **Highlights** the exact `supporting_quote` text using `<mark>` HTML tags with a yellow background, scrolling the view to the match.
+3. The highlighted view appears in a side panel next to the decision table so the user can read the protocol context and make their decision without leaving the table.
+
+**Accept / Reject / Edit buttons** are live:
+- **Accept**: Marks the KRI as accepted; it will enter the domain KRI set.
+- **Reject**: Marks the KRI as rejected; it will be excluded (logged with reason in `{domain}_manual_review_decisions.json`).
+- **Edit**: Opens an inline editor for any field (name, description, quote, reference). After editing, the user clicks Accept to finalize. Edits are stored verbatim.
+
+The table displays immediately at the end of each domain's tier adjudication — **do not wait** for the next domain or phase before displaying it. If no T2 or T3-PROMOTED KRIs exist for a domain, display a brief confirmation: "Domain [X]: 0 KRIs require manual review — all approved automatically at Tier 1."
 
 **API key storage:**
 Keys are stored in `~/.claude/secrets/protocol-kri-extractor.json` (never in the skill directory, never pushed to git). The file is `chmod 600` (owner-only). See `scripts/gemini_extract.py` for the loading mechanism.
