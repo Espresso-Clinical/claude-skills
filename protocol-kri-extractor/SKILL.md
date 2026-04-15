@@ -1115,5 +1115,7 @@ This copies all artifacts (extracted_kris.json, Extracted_KRIs.xlsx, raw domain 
 - `scripts/camelot_table_extractor.py` — Camelot-based table extraction (PRIMARY for SoA)
 - `scripts/vision_table_extractor.py` — Vision-based extraction + multi-pass + Heuristic 10
 - `scripts/gemini_extract.py` — Gemini API extraction agents (multi-model competition)
+- `scripts/step3_5_orphan_scan.py` — Protocol-wide orphan scan (6-agent panel, section + page sweeps, blocking gate)
+- `scripts/step3b_accuracy.py` — Full KRI accuracy judging at 100% coverage (5-judge cross-model panel, blocking gate)
 - `scripts/step3d_verify.py` — Full verbatim pdfplumber verification (blocking gate)
 - `scripts/step4a_assemble.py` — Assembly + Excel generation (no LLM needed)
