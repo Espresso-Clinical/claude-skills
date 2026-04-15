@@ -1264,45 +1264,96 @@ Return ONLY the JSON.
 
 ---
 
-## Step 3B — Accuracy Check
+## Step 3.5 — Protocol-Wide Orphan Scan (MANDATORY BLOCKING, runs FIRST in Phase 3)
 
-**Purpose**: Sample 20 KRIs (4 per category), re-read their source pages, verify faithfulness.
+**Purpose**: After Phase 2 completes, scan the entire protocol to find rule-like content that was not captured by any domain extractor. Distinct from (and additional to) the Step 1C footnote orphan validation. See `SKILL.md` for the full spec — this file mirrors the operational summary.
 
-**How to sample**: Take the first 4 KRIs from each `raw_{CAT}.json` that have a parseable page number in `protocol_reference`.
+**Input**: full PDF + `manifest.json` + all `raw_{DOMAIN}.json` files.
 
-**For each batch of 5 KRIs**, read their cited PDF pages, then:
+**Architecture**: 6-agent cross-model panel — 3 Claude Sonnet 4 + 3 Gemini 2.5 Pro.
 
-**LLM prompt**:
+**Phase 1 — Primary section sweep (section-by-section)**: For each section in `manifest.json`, each of the 6 agents independently scans the section's full text with the list of existing KRIs already citing pages in that section. Each agent returns candidate orphan rule-like statements.
+
+**Phase 2 — Secondary page sweep (orphan pages only)**: For every PDF page NOT claimed by any section in `manifest.json`, run the same 6-agent scan page-by-page.
+
+**Phase 3 — Consolidation** (high-recall candidate, consensus promotion):
+- ≥4/6 agents → HIGH CONFIDENCE → auto-promote
+- 2–3/6 agents → USER DECISION → escalate, pipeline pauses for response
+- 1/6 agent → LOW CONFIDENCE → NOT dropped silently; logged in `low_confidence_candidates` in the report
+
+**Phase 4 — Cross-check**: adjudication judge checks each promoted candidate against ALL existing KRIs across ALL domains for true-duplicate coverage (atomization splits are NOT duplicates — see dedup section). Covered candidates are dropped with a logged reason.
+
+**Phase 5 — Domain classification & KRI generation**: surviving candidates classified per Domain Boundary Rules. Full KRI records generated with `ORPH-` prefixed IDs and appended to the corresponding `raw_{DOMAIN}.json`.
+
+**Phase 6 — Gating**: Step 3A cannot start until the scan is complete, all user decisions are resolved, cross-check is done, classification is done, and `orphan_scan_report.json` is written. Compliance Monitor enforces this.
+
+**Save output**: `{out_dir}/orphan_scan_report.json` with sections: `_meta`, `primary_sweep`, `secondary_sweep`, `consolidation`, `low_confidence_candidates`, `user_decisions`, `cross_check`, `classification`, `promoted_orphans`.
+
+**Promoted orphans flow through the rest of Phase 3** (3A, 3A+, 3B, 3C, 3D) exactly like Phase 2 KRIs.
+
+---
+
+## Step 3B — Full KRI Accuracy Judging (MANDATORY BLOCKING, 100% coverage)
+
+**Purpose**: Verify the clinical content of EVERY KRI (100% coverage across all domains, including orphan KRIs promoted in Step 3.5) against the protocol. Sampling is NEVER permitted. The prior 20-KRI / 4-per-category sampling approach is replaced and must not be re-introduced. See `SKILL.md` for the full spec — this file mirrors the operational summary.
+
+**Input**: all KRIs across all `raw_{DOMAIN}.json` files + full PDF.
+
+**Architecture — 5-judge cross-model panel per KRI**:
+- C1, C2, C3 → Claude Sonnet 4 (3 independent judges)
+- G1, G2 → Gemini 2.5 Pro (2 independent judges)
+
+**Per-KRI input to each judge**: KRI record + full text of cited page(s) + 1 page before and after + footnote text from `footnote_map.json` if applicable.
+
+**The 5 checks each judge runs**:
+1. **C1 Faithfulness** — does `rule_for_llm` say what the protocol says, nothing more, nothing less?
+2. **C2 Specific values** — every threshold, drug, dose, timing window, analyte, visit, day count, percentage, unit matches exactly
+3. **C3 Reference accuracy** — cited section + page is ABOUT the clinical topic (semantic, not substring; catches wrong-page-but-quote-happens-to-appear cases)
+4. **C4 Completeness** — no critical detail the protocol specifies is missing
+5. **C5 Scope accuracy** — visit, population, time-point scope match protocol intent
+
+**Per-judge verdict JSON**:
+```json
+{
+  "judge_id": "C1",
+  "model": "claude-sonnet-4",
+  "kri_id": "SAF-003",
+  "verdict": "CORRECT | IMPRECISE | WRONG",
+  "failing_checks": ["C2", "C4"],
+  "issue": "specific problem or null",
+  "corrected_rule": "corrected text or null",
+  "protocol_evidence": "verbatim ≤25-word quote proving verdict"
+}
 ```
-Verify accuracy of these KRIs against the protocol text.
 
-KRIs TO VERIFY:
-{kri_list_with_rule_and_reference}
+**Consensus adjudication per KRI**:
+- 5/5 CORRECT → PASS
+- 4/5 CORRECT + 1 non-CORRECT → PASS (with dissent logged)
+- 3/5 CORRECT + 2 non-CORRECT → FLAG → user decision, pipeline pauses
+- ≤2/5 CORRECT → FAIL → blocking
 
-PROTOCOL SOURCE PAGES:
-{page_texts}
+**Auto-correction** (IMPRECISE or FAIL):
+1. Collect all `corrected_rule` proposals from judges
+2. If ≥3 judges propose semantically equivalent corrections → merge and apply
+3. **Re-run the full 5-judge panel on the corrected KRI** (mandatory re-verification — never apply without re-verification)
+4. If re-verified at ≥4/5 CORRECT → PASS, log the correction
+5. Otherwise → user decision
 
-For each KRI verify:
-1. Is rule_for_llm faithful to the protocol?
-2. Are all values correct (thresholds, drug names, doses, timing)?
-3. Is protocol_reference section/page accurate?
-4. Are any critical details missing?
+**Gating** (all must be true before Step 3C can begin):
+- 0 FAIL
+- 0 unresolved FLAG
+- Every IMPRECISE either auto-corrected + re-verified ≥4/5 CORRECT, or explicitly user-accepted
 
-Return JSON array:
-[
-  {
-    "kri_id": "...",
-    "verdict": "CORRECT|IMPRECISE|WRONG",
-    "issue": "specific problem or null",
-    "corrected_rule": "corrected text if IMPRECISE/WRONG, else null",
-    "protocol_evidence": "verbatim quote ≤20 words proving verdict"
-  }
-]
-```
+**Batching and cost control**:
+- Group KRIs by cited page → load page text once per run, reuse
+- Batch up to 8 KRIs per LLM call when they share the same page context
+- Parallel workers across domains (6 concurrent: SOA, ELIG, SAF, END, OPS, NDEF)
+- 5 judges per KRI run in parallel, not sequentially
+- Page text cache in memory, keyed by page number
 
-**Threshold**: ≥85% CORRECT → pass. Otherwise fix WRONG/IMPRECISE items and re-verify.
+**Save output**: `{out_dir}/accuracy_report_full.json` with sections: `_meta` (including pass_gate boolean), `per_kri` (all 5 judge verdicts + consensus + correction + user decision per KRI), `blocking_issues`, `auto_correction_log`, `user_decisions`.
 
-**Save output**: `{out_dir}/accuracy_report.json`
+**Relationship to Step 3D**: 3B checks clinical meaning (semantic); 3D checks verbatim substring (deterministic). Both run. Neither replaces the other. The combination catches both wrong clinical content AND fabricated quotes AND wrong-page-but-substring-match cases.
 
 ---
 
