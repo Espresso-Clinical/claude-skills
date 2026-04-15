@@ -221,15 +221,9 @@ pip install pdfplumber pymupdf camelot-py[cv] opencv-python-headless openpyxl --
 - Output directory (will be created)
 - Optional: golden set JSON path (for step 4B comparison)
 
-### Full pipeline command
-```bash
-python /path/to/scripts/run_pipeline.py \
-  --pdf /path/to/protocol.pdf \
-  --out /path/to/output/ \
-  [--golden /path/to/golden_set.json]
-```
+### How the pipeline runs
 
-Or run steps individually — see **Step-by-step** below.
+There is no single orchestrator script. The pipeline is executed by Claude in-session when this skill is invoked: Claude reads `SKILL.md` and `references/steps.md`, then performs each step either as an in-session LLM task (Steps 1A, 1B, 2, 3A, 3B, 3C, 4C) or by calling one of the deterministic helper scripts in `scripts/` (Steps 1B-Camelot, 1B-Vision, 1C, 3D, 4A). See **Step-by-step** below for which step is which.
 
 ---
 
