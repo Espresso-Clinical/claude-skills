@@ -413,15 +413,41 @@ pip install pdfplumber pymupdf camelot-py[cv] opencv-python-headless openpyxl --
 - Output directory (will be created)
 - Optional: golden set JSON path (for step 4B comparison)
 
-### Full pipeline command
+### Full pipeline command (DETERMINISTIC — canonical entry point)
+
+`scripts/run.py` is the **single canonical entry point** for the pipeline. It executes every documented step in the exact order defined in this file and enforces the three blocking gates (Step 3.5 orphan scan, Step 3B full accuracy judging, Step 3D verbatim verification). No step can be silently skipped, reordered, or softened.
+
 ```bash
-python /path/to/scripts/run_pipeline.py \
+python /path/to/scripts/run.py \
   --pdf /path/to/protocol.pdf \
   --out /path/to/output/ \
   [--golden /path/to/golden_set.json]
 ```
 
-Or run steps individually — see **Step-by-step** below.
+Other modes:
+```bash
+# Resume from a specific step (useful after resolving a blocking gate)
+python run.py --pdf ... --out ... --from 3.5
+python run.py --pdf ... --out ... --from 3b
+
+# Run only a specific step
+python run.py --pdf ... --out ... --only 3b
+
+# See full step order and blocking gates
+python run.py --help
+```
+
+**Step order enforced by `run.py`** (matches this document exactly):
+`1a → 1b-camelot → 1b → 1c → 2 → 3.5 → 3a → 3b → 3c → 3d → 4a → 4a-dedup → 4b`
+
+**Blocking gates** (pipeline stops with exit 1 if any fail):
+- **Step 3.5** — all USER_DECISION orphan candidates must be resolved
+- **Step 3B** — 0 FAIL and 0 unresolved FLAG across all KRIs (100% coverage)
+- **Step 3D** — 100% verbatim pass
+
+Any attempt to run individual step scripts outside of `run.py` (for debugging) is permitted, but the pipeline for production runs MUST go through `run.py` so that step order and blocking gates are enforced.
+
+Or run steps individually for debugging — see **Step-by-step** below.
 
 ---
 
