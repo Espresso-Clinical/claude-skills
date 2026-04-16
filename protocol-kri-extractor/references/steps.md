@@ -105,7 +105,7 @@ result = run_extraction(
 
 **Multi-page table handling**: Many protocols split the SoA across 2-3 pages. The `merge_multipage_tables()` function automatically detects matching column structures and merges procedure rows.
 
-**Known limitation**: Camelot may miss cells where the content is "X" plus footnote superscripts (e.g., "X¹⁰", "X¹³·¹⁴"). These appear as empty cells in Camelot's output. Use Vision fallback (Step 1B-Vision) to recover these.
+**Superscript handling**: The camelot extractor correctly handles compound and dot-separated footnote superscripts in table cells — e.g., `X10`, `X13,14`, `X13·14` — parsing both the X mark and all associated footnote numbers. No footnote association is missed due to superscript formatting. Vision fallback (Step 1B-Vision) is still used for any cells where Camelot's lattice mode reads the cell as empty.
 
 **Save outputs**:
 - `{out_dir}/soa_table.csv` — canonical CSV (use this for all downstream steps)
@@ -513,17 +513,18 @@ Merge all 10 agent outputs (5 Claude + 5 Gemini). For each unique KRI found acro
 For each KRI in the 4–6 range, present:
 
 ```
-┌──────────────┬─────────────────────────────────┬───────────────────┬──────────┬──────────────────────────────┬──────────┐
-│ KRI ID       │ KRI Name                        │ Agents            │ Verified │ Reference & Quote            │ Decision │
-├──────────────┼─────────────────────────────────┼───────────────────┼──────────┼──────────────────────────────┼──────────┤
-│ SAF-AE-007   │ SAE Reporting 48h Window        │ 5/10 (3C + 2G)   │ YES      │ Section 8.14, p.118 — "..."  │ ?        │
-│ SAF-STOP-003 │ CK >10x ULN Stopping Rule      │ 4/10 (2C + 2G)   │ YES      │ Section 8.5, p.105 — "..."   │ ?        │
-│ SAF-PREG-002 │ Male Partner Contraception      │ 6/10 (4C + 2G)   │ NO       │ Section 4.1, p.55 — "..."    │ ?        │
-└──────────────┴─────────────────────────────────┴───────────────────┴──────────┴──────────────────────────────┴──────────┘
+┌──────────────┬─────────────────────────────────┬─────────────────────────────────────────┬───────────────────┬──────────┬──────────────────────────────┬──────────┐
+│ KRI ID       │ KRI Name                        │ Description                             │ Agents            │ Verified │ Reference & Quote            │ Decision │
+├──────────────┼─────────────────────────────────┼─────────────────────────────────────────┼───────────────────┼──────────┼──────────────────────────────┼──────────┤
+│ SAF-AE-007   │ SAE Reporting 48h Window        │ Monitors SAE reporting within 48 hours  │ 5/10 (3C + 2G)   │ YES      │ Section 8.14, p.118 — "..."  │ ?        │
+│ SAF-STOP-003 │ CK >10x ULN Stopping Rule      │ Monitors CK elevation stopping trigger  │ 4/10 (2C + 2G)   │ YES      │ Section 8.5, p.105 — "..."   │ ?        │
+│ SAF-PREG-002 │ Male Partner Contraception      │ Monitors partner contraception require. │ 6/10 (4C + 2G)   │ NO       │ Section 4.1, p.55 — "..."    │ ?        │
+└──────────────┴─────────────────────────────────┴─────────────────────────────────────────┴───────────────────┴──────────┴──────────────────────────────┴──────────┘
 ```
 
 Where:
 - **Agents**: total count + breakdown (e.g., "5/10 (3C + 2G)" = 3 Claude + 2 Gemini)
+- **Description**: 1-2 sentence description of what this KRI monitors and why it matters
 - **Verified**: YES if the supporting quote was found verbatim on the cited protocol page via pdfplumber, NO otherwise
 - **Reference & Quote**: the `combined_ref` field (protocol reference + verbatim quote)
 - **Decision**: user fills in — approve or reject
@@ -564,7 +565,6 @@ Save adjudication results in `{out_dir}/{cat}_adjudication.json`.
 - ELIG: `ELIG-INC-{NNN}` and `ELIG-EXC-{NNN}`
 - SAF: `SAF-AE-{NNN}`, `SAF-ALLERGY-{NNN}`, `SAF-PREG-{NNN}`, `SAF-RM-{NNN}`, `SAF-STOP-{NNN}`
 - END: `END-PRI-{NNN}` (primary), `END-KSEC-{NNN}` (key secondary), `END-SEC-{NNN}` (other secondary), `END-BIO-{NNN}` (biomarker), `END-HCRU-{NNN}` (health care resource utilization), `END-EXP-{NNN}` (exploratory)
-- STAT: `STAT-{NNN}` (statistical methods — primary model, Cox model, multiplicity, missing data, supplemental, MMRM, transformations, baseline)
 - GOV: `GOV-POP-{NNN}` (analysis populations), `GOV-INT-{NNN}` (interim analysis/alpha), `GOV-END-{NNN}` (study end), `GOV-DMC-{NNN}` (DMC rules)
 - OPS: `OPS-IMP-{NNN}`, `OPS-BLIND-{NNN}`, `OPS-RECS-{NNN}`, `OPS-COMP-{NNN}`
 
@@ -802,11 +802,11 @@ EXTRACTION RULES:
 Return ONLY a JSON array
 ```
 
-### END prompt (THREE sub-categories: Endpoints, Statistics, Governance)
+### END prompt (TWO sub-categories: Endpoints, Governance)
 
-**IMPORTANT — Atomicity**: Every endpoint, every analyte, every statistical method, and every governance rule gets its own separate KRI. Never combine multiple endpoints or multiple analytes into one KRI. If the protocol lists 15 secondary endpoints, produce 15 KRIs. If it lists 13 biomarker analytes, produce 13 KRIs.
+**IMPORTANT — Atomicity**: Every endpoint, every analyte, and every governance rule gets its own separate KRI. Never combine multiple endpoints or multiple analytes into one KRI. If the protocol lists 15 secondary endpoints, produce 15 KRIs. If it lists 13 biomarker analytes, produce 13 KRIs.
 
-**Run the END extraction in THREE passes** to ensure complete coverage:
+**Run the END extraction in TWO passes** to ensure complete coverage:
 
 **Pass 1 — Endpoint Definitions (Sections 2.x / Objectives & Endpoints)**:
 ```
@@ -859,59 +859,7 @@ and the exact definition (e.g. "first adjudicated and confirmed occurrence of...
 Return ONLY a JSON array
 ```
 
-**Pass 2 — Statistical Methods (Section 9.x / Statistical Considerations)**:
-```
-Extract Statistical Method KRIs from this protocol section.
-Protocol: {protocol_id}
-
-PROTOCOL TEXT:
-{section_text}
-
-EXTRACTION RULES — STATISTICAL METHODS:
-One SEPARATE KRI per analysis method. Do NOT combine multiple methods into one KRI.
-
-- PRIMARY ANALYSIS MODEL: The exact test (e.g. log rank), stratification factors,
-  exact two-sided alpha level AFTER all adjustments. severity: critical.
-  kri_id: STAT-001
-
-- HAZARD RATIO MODEL: Estimation model (e.g. Cox proportional hazards), covariates,
-  stratification factors, confidence interval width, convergence fallback plan.
-  severity: critical. kri_id: STAT-002
-
-- MULTIPLICITY CONTROL: Gatekeeping procedure, fixed sequence testing, alpha allocation,
-  experimentwise Type 1 error control method, exact alpha values, testing sequence order.
-  severity: critical. kri_id: STAT-003
-
-- MISSING DATA / IMPUTATION: Method (e.g. multiple imputations for informative censoring),
-  which subjects qualify, conservative approach (e.g. imputation from placebo group only).
-  severity: major. kri_id: STAT-004
-
-- SUPPLEMENTAL / SENSITIVITY ANALYSES: Each gets its own KRI.
-  - Recurrent events method (e.g. Wei-Lin-Weissfeld) with covariates and stratification
-  - Adherent subject analysis: exact inclusion criteria (treatment duration, LDL-C threshold,
-    visit number), additional covariates (smoking, age, BMI, baseline history)
-  severity: major. kri_id: STAT-005, STAT-006, etc.
-
-- BIOMARKER ANALYSIS MODEL: MMRM or other model, list ALL fixed effects individually
-  (treatment, visit, baseline, interactions), covariance structure (unstructured),
-  estimation method (REML). severity: major. kri_id: STAT-007
-
-- DATA TRANSFORMATIONS: Which analytes are log-transformed, zero-value replacement method
-  (e.g. replace 0 with 0.0001). severity: major. kri_id: STAT-008
-
-- BASELINE DEFINITIONS: Exact calculation method for each type of baseline
-  (e.g. "mean of last two non-missing values prior to and including randomization date"
-  for biomarkers; "Day 0 pre-dose" for general). severity: major. kri_id: STAT-009
-
-Rule format: "Verify that [analysis/model] is [performed/fit] using [exact method]
-with [exact parameters] as [specified detail]"
-Include exact numeric values: alpha levels (0.04898, 0.001, 0.00002), thresholds (40 mg/dL),
-event counts (508, 288), percentages (75%), visit numbers (Visit 8, Visit 11).
-
-Return ONLY a JSON array
-```
-
-**Pass 3 — Governance (Sections 9.x / Interim Analysis, Study Design)**:
+**Pass 2 — Governance (Sections 9.x / Interim Analysis, Study Design)**:
 ```
 Extract Governance KRIs from this protocol section.
 Protocol: {protocol_id}
@@ -1557,9 +1505,10 @@ def generate_excel(out_dir, all_kris_by_category):
         ("SAF&TOX", "Safety & Toxicity", False),
         ("END&STAT", "Endpoints & Statistics", False),
         ("OPE&COM", "Operations & Compliance", False),
+        ("NDEF", "Non-Definable", False),
     ]
     CAT_MAP = {"SOA": "SOA", "ELIGIBILITY": "ELIG", "SAF&TOX": "SAF",
-               "END&STAT": "END", "OPE&COM": "OPS"}
+               "END&STAT": "END", "OPE&COM": "OPS", "NDEF": "NDEF"}
 
     wb = openpyxl.Workbook()
     wb.remove(wb.active)
@@ -1948,6 +1897,8 @@ After saving the JSON, present a human-readable summary:
 - Private-use characters (e.g., `\uf0b1` for ±) — copy from pdfplumber output, not typed
 - Merged words (e.g., "IPadministration", "14days") — pdfplumber strips spaces at word boundaries in some PDFs
 
+**Fabricated quote = hard failure**: A `supporting_quote` that cannot be found verbatim in the cited page is a **fabricated quote** — a hard pipeline failure. Not a warning, not a soft flag. The pipeline stops immediately. The KRI must be corrected before proceeding. No exceptions.
+
 **Blocking gate**: If `verify_report.json` shows any FAIL, the pipeline stops. Fix each failing KRI (correct the quote or the page reference), then re-run Step 3D until 0 failures. Only then proceed to Step 4A.
 
 **Output — `verify_report.json`**:
@@ -1956,7 +1907,7 @@ After saving the JSON, present a human-readable summary:
   "_meta": { "step": "3D", "total": 675, "pass": 675, "auto_corrected": 3, "fail": 0, "gate": "PASS" },
   "pass": ["SOA-V1-001", "SOA-V1-002", "..."],
   "auto_corrected": [
-    { "kri_id": "END-STAT-002", "old_pg": 47, "new_pg": 48 }
+    { "kri_id": "GOV-INT-002", "old_pg": 47, "new_pg": 48 }
   ],
   "fail": []
 }

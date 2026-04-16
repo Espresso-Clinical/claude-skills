@@ -199,7 +199,7 @@ Every extracted KRI matches this structure:
 - `supporting_quote` — verbatim text ≤30 words copied exactly from the PDF page. **NEVER wrap in outer double quotes** — do not start or end with `"`. The `combined_ref` field adds its own quotes. No leading or trailing `"` character.
 - `combined_ref` — always computed as: `f'{protocol_reference} — "{supporting_quote}"'` (em dash `—`, not hyphen `-`). This is the **single field** used in the Excel "Protocol Reference & Quote" column. Never split it into two columns.
 - `additional_footnotes` — null if no relevant footnote, otherwise verbatim footnote text.
-- `severity` — **critical**: primary endpoint, analysis population, primary analysis model, multiplicity control, interim analysis rules. **major**: secondary endpoints, biomarker endpoints, supplemental analysis methods, baseline definitions. **minor**: exploratory endpoints, HCRU endpoints, administrative governance rules.
+- `severity` — **critical**: primary endpoint, analysis population, interim analysis rules. **major**: secondary endpoints, biomarker endpoints. **minor**: exploratory endpoints, HCRU endpoints, administrative governance rules.
 - **SOA table/footnote page reference rule**: For SOA KRIs derived from the SoA table or its footnotes, `protocol_reference` must use the **full page range** covering the table AND all footnote pages (e.g., `"Schedule of Activities, Footnote 4, p.24-p.29"`). Do NOT cite individual pages within the table section. Do NOT add a "Section X.X" prefix if the SoA table has no section number — just use `"Schedule of Activities"`. Only SOA KRIs whose content comes from protocol TEXT outside the table (e.g., dosing instructions from Section 5.4) should have a specific section + page reference.
 - **No fabricated section numbers for SOA table**: If the SoA table in the protocol has no section number (many protocols just have it as a standalone table), do not invent one. Use `"Schedule of Activities"` as the reference label.
 
@@ -217,7 +217,7 @@ Examples of correct atomicity:
 - "Verify that vital signs were measured at V3"
 - "Verify that the key secondary endpoint is calculated as time from randomization to the first occurrence of a composite of CV death, non-fatal MI, and non-fatal stroke"
 
-**This applies across all domains:** SOA (one procedure × one visit = one KRI), ELIG (one criterion or sub-criterion = one KRI), SAF (one reporting rule or one stopping rule = one KRI), END (one endpoint definition or one statistical method = one KRI), OPS (one operational rule = one KRI).
+**This applies across all domains:** SOA (one procedure × one visit = one KRI), ELIG (one criterion or sub-criterion = one KRI), SAF (one reporting rule or one stopping rule = one KRI), END (one endpoint definition or one governance rule = one KRI), OPS (one operational rule = one KRI).
 
 Six categories (universal across all trials — from ICH GCP):
 - **SOA** — Schedule of Activities
@@ -225,7 +225,7 @@ Six categories (universal across all trials — from ICH GCP):
 - **SAF** — Safety & Toxicity
 - **END** — Endpoints, Statistics & Governance (see detailed sub-categories below)
 - **OPS** — Operations & Compliance
-- **NDEF** — Non-Definable: eligibility criteria or rules based on investigator clinical judgment that cannot be expressed as a binary verifiable rule. Rule format: `"NDEF — Non-verifiable: [reason why LLM cannot verify]"`. These are documented so auditors know the criterion exists but flagged as out-of-scope for automated monitoring.
+- **NDEF** — Non-Definable: eligibility criteria or rules based on investigator clinical judgment that cannot be expressed as a binary verifiable rule. Rule format: `"NDEF — Non-verifiable: [reason why LLM cannot verify]"`. These are documented so auditors know the criterion exists but flagged as out-of-scope for automated monitoring. **NDEF KRIs use the same column format as all other domains: KRI ID, KRI Name, Category, Description, Rule for LLM, Protocol Reference & Quote. NDEF is not a reduced-format domain.**
 
 ---
 
@@ -262,6 +262,9 @@ SAF does **NOT** contain:
 - ✗ Equipment standardization (same cuff, calibrated device, same arm) → **OPS**
 - ✗ When/whether a procedure occurs at a specific visit → **SOA**
 - ✗ Sample tube type or processing technique → **OPS**
+- ✗ GCP documentation of protocol deviations without a clinical response trigger → **OPS**
+
+**SAF/OPS boundary for deviations**: SAF owns deviations that trigger a clinical safety response. GCP documentation of protocol deviations without a clinical response trigger belongs in OPS.
 
 **Example of the error to avoid**: The protocol describes BP methodology and vital signs positioning in its "Safety Assessments" section. Those rules are in the safety section but are not about safety thresholds — they belong in OPS. Do not use "found in safety section of protocol" as the criterion for SAF.
 
@@ -274,6 +277,9 @@ OPS contains:
 - **IP storage, handling, dispensing, accountability**
 - **Documentation and records**: CRF corrections, consent documentation, delegation logs
 - **Regulatory compliance**: IRB approvals, inspection notifications, record retention
+- **Protocol deviation documentation**: GCP-required logging, categorization, reporting, and submission of protocol deviations to sponsor and regulatory authority. One KRI per distinct deviation reporting obligation.
+
+**OPS/SAF boundary for protocol deviations**: OPS owns protocol deviation as a GCP compliance document — logging, categorization, and reporting. If a deviation triggers a clinical safety response (e.g., deviation from a stopping rule requiring clinical action), that KRI belongs in SAF.
 
 ### Rule 4 — NDEF for investigator-judgment rules that an LLM cannot verify
 
@@ -387,9 +393,9 @@ Two KRIs from **different numbered protocol subsections** (e.g., §8.7 and §8.1
 
 ---
 
-### END Domain — Three Mandatory Sub-Categories
+### END Domain — Two Mandatory Sub-Categories
 
-The END domain must produce KRIs in three sub-categories. All use `category_id: "END"` and `category_label: "Endpoints & Statistics"`.
+The END domain must produce KRIs in two sub-categories. All use `category_id: "END"` and `category_label: "Endpoints & Statistics"`.
 
 **Sub-category 1 — Endpoint Definitions (ID prefix: `END-`)**
 One KRI per protocol-defined endpoint. Every endpoint listed in the protocol's objectives section gets its own KRI:
@@ -399,23 +405,13 @@ One KRI per protocol-defined endpoint. Every endpoint listed in the protocol's o
 - **Each biomarker endpoint separately**: LDL-C percent change Week 14, LDL-C nominal change Week 14, LDL-C percent change last available, Non-HDL-C, Total cholesterol, VLDL-C, RLP-C, Apo B, Lp(a), Triglycerides, HDL-C, Apo A-I, hs-CRP — each analyte × each measurement type = one KRI. Severity: major.
 - **Each HCRU endpoint separately**: all-cause hospitalizations, CV hospitalizations, ER visits, physician office visits, outpatient rehab visits, 30-day readmissions — each one a separate KRI. Severity: minor.
 
-**Sub-category 2 — Statistical Methods (ID prefix: `STAT-`)**
-One KRI per analysis method specified in the protocol's statistical section:
-- **Primary analysis model**: test type (log rank), stratification factors, exact two-sided alpha after adjustments. Severity: critical.
-- **Hazard ratio estimation model**: Cox proportional hazards, covariates, stratification factors, confidence interval, convergence fallback. Severity: critical.
-- **Multiplicity control**: gatekeeping procedure, fixed sequence testing, alpha allocation, experimentwise Type 1 error control. Severity: critical.
-- **Missing data handling**: imputation method (e.g. multiple imputations for informative censoring), which subjects (e.g. withdrew consent before cutoff), conservative approach (e.g. imputation from placebo only). Severity: major.
-- **Supplemental analyses**: recurrent events method (e.g. Wei-Lin-Weissfeld), adherent subject analysis with exact criteria (treatment duration, LDL-C threshold, additional covariates). Severity: major.
-- **Biomarker analysis model**: MMRM with all fixed effects listed, covariance structure, estimation method (REML). Severity: major.
-- **Data transformations**: which analytes are log-transformed, zero-value replacement. Severity: major.
-- **Baseline definitions**: exact calculation method (e.g. mean of last two non-missing values prior to randomization). Severity: major.
-
-**Sub-category 3 — Governance (ID prefix: `GOV-`)**
+**Sub-category 2 — Governance (ID prefix: `GOV-`)**
 One KRI per trial governance rule:
 - **Analysis population definitions**: Full Analysis Set (FAS) exact inclusion criteria, Safety Analysis Set (SAS) exact inclusion criteria, any other analysis sets. Severity: critical.
 - **Interim analysis trigger**: exact event count thresholds, which endpoints must be met, percentage requirements. Severity: critical.
 - **Alpha spending**: method name (e.g. Heybittle-Peto), exact alpha value, adjustment to final analysis alpha. Severity: critical.
 - **Study end/completion definition**: event count target, time-based criterion, whichever-occurs-later logic. Severity: major.
+- **Data locks**: protocol-defined data lock date, data cut-off procedures, and lock criteria. One KRI per distinct lock event type. Severity: major.
 
 ---
 
@@ -431,7 +427,11 @@ pip install pdfplumber pymupdf camelot-py[cv] opencv-python-headless openpyxl --
 - Output directory (will be created)
 - Optional: golden set JSON path (for step 4B comparison)
 
+**Canonical run directory**: `~/Downloads/extractor/<protocol_id>/<run_id>/` — e.g., `~/Downloads/extractor/B1481038/run_011/`. Every run uses its own directory. Pass this as the `--out` argument to `run.py`.
+
 ### Full pipeline command (DETERMINISTIC — canonical entry point)
+
+**`bypassPermissions` permanent default**: `bypassPermissions` must be set as a permanent default for all pipeline runs — no approval prompts should interrupt extraction. Set this in the Claude Code session before invoking `run.py`.
 
 `scripts/run.py` is the **single canonical entry point** for the pipeline. It executes every documented step in the exact order defined in this file and enforces the three blocking gates (Step 3.5 orphan scan, Step 3B full accuracy judging, Step 3D verbatim verification). No step can be silently skipped, reordered, or softened.
 
@@ -463,6 +463,8 @@ python run.py --help
 - **Step 3B** — 0 FAIL and 0 unresolved FLAG across all KRIs (100% coverage)
 - **Step 3D** — 100% verbatim pass
 
+**Complete protocol coverage guarantee**: Step 3.5 (full protocol sweep — section-by-section + page-by-page for unclaimed pages) combined with Step 3D (verbatim quote verification on every KRI's cited page) guarantees no protocol page is unread and no supporting quote goes unverified.
+
 Any attempt to run individual step scripts outside of `run.py` (for debugging) is permitted, but the pipeline for production runs MUST go through `run.py` so that step order and blocking gates are enforced.
 
 Or run steps individually for debugging — see **Step-by-step** below.
@@ -479,7 +481,7 @@ Read `references/steps.md` for the detailed prompt templates and logic for each 
 
 **Step 1B-Camelot — Table Extraction (PRIMARY)**: Use Camelot (lattice mode) via `scripts/camelot_table_extractor.py` to extract the SoA table into `soa_table.csv` and `soa_table.json`. This is the **PRIMARY** source of truth for the SoA procedure × visit grid. Camelot reads table line geometry from the PDF and gives ~99% structural accuracy — deterministic, reproducible, and not affected by LLM variance. Handles multi-page tables automatically. The CSV and JSON outputs become the canonical SoA data for all downstream steps.
 
-**Step 1B-Vision — Vision Fallback (SECONDARY)**: For cells where Camelot detects the lattice structure but the cell content contains footnote superscripts (e.g., "X¹⁰", "X¹³·¹⁴") that Camelot may read as empty, use Claude Vision at 450 DPI as fallback. Also use multi-pass vision (full + left 55% crop + right 55% crop at 450 DPI) with majority voting for wide tables (>12 columns) to recover any cells Camelot missed. Save conflicts in `multipass_conflicts.json`.
+**Step 1B-Vision — Vision Fallback (SECONDARY)**: For cells where Camelot detects the lattice structure but the cell content contains footnote superscripts that Camelot may read as empty, use Claude Vision at 450 DPI as fallback. The camelot extractor correctly handles compound and dot-separated footnote superscripts in table cells — e.g., `X10`, `X13,14`, `X13·14` — parsing both the X mark and all associated footnote numbers. No footnote association is missed due to superscript formatting. Also use multi-pass vision (full + left 55% crop + right 55% crop at 450 DPI) with majority voting for wide tables (>12 columns) to recover any cells Camelot missed. Save conflicts in `multipass_conflicts.json`.
 
 **Step 1B-ColDetect — Column Boundary Detection**: After extraction, run `scripts/vision_table_extractor.py` column detection to verify column boundaries match the Camelot-extracted structure. Flag any discrepancies.
 
@@ -493,15 +495,15 @@ The SOA extraction follows a strict 6-step process:
 
 1. **Visit mapping**: Pull all visits and their timing from the Camelot CSV. Establish naming conventions (V0, V1, V2... EDC_EOS). From this point forward, use ONLY these canonical names.
 2. **Table verification**: Compare the Camelot CSV against the PDF image for verification. Flag any discrepancies. Save `soa_table.csv` and `soa_table.json` as the tracking artifacts.
-3. **Check-in KRIs**: For each visit, create ONE check-in KRI verifying the subject attended within the protocol-specified timing window.
+3. **Check-in KRIs**: For each visit, create ONE check-in KRI verifying the subject attended within the protocol-specified timing window. The protocol-specified timing window must be sourced from wherever the protocol defines it — table header, footnote, dedicated timing section, or protocol amendment. Do not assume or generalize from another visit's window.
 4. **Procedure KRIs**: For each visit, create ONE KRI listing ALL procedures required at that visit (in the format: `V1 - procedure name`). Also create one KRI per procedure × visit cell.
 5. **Footnote enrichment**: After the table-based KRIs are complete, read all footnotes from the protocol and enrich each KRI with relevant footnote details. Also create **cross-visit rule KRIs** for protocol-wide rules (fasting requirements, dosing windows, 10-day lipid rule, IP administration sequence, missed visit escalation, EDC retention, safety follow-up periods, etc.).
 6. **Self-verification**: Cross-check that every X cell in the Camelot CSV has a corresponding KRI. Report: `N/N cells covered = 100%`.
 
-For non-SOA categories, extraction uses one LLM call per category producing `raw_{CAT}.json`:
+For non-SOA categories (ELIG, SAF, END, OPS), extraction uses a **10-agent multi-model panel** (5 Claude Sonnet + 5 Gemini 2.5 Pro agents running in parallel). Consensus determines tier: **Tier 1** = 7–10 agents agree (auto-approved), **Tier 2** = 4–6 agents agree (decision table shown to user, pipeline pauses for approval), **Tier 3** = 1–3 agents (enters Tier 3 promotion pipeline). Per-domain content rules:
 - ELIG: one KRI per criterion/sub-criterion; criteria based on pure investigator judgment → NDEF
 - SAF: every reporting timeline, stopping rule, emergency protocol
-- END: **three sub-categories** — (1) one KRI per endpoint definition (primary, each key secondary, each other secondary individually, each biomarker analyte × measurement type, each HCRU metric), (2) one KRI per statistical method (primary model, hazard ratio model, multiplicity control, missing data, supplemental analyses, biomarker model, transformations, baseline definitions), (3) one KRI per governance rule (analysis populations, interim analysis triggers, alpha spending, study end definition)
+- END: **two sub-categories** — (1) one KRI per endpoint definition (primary, each key secondary, each other secondary individually, each biomarker analyte × measurement type, each HCRU metric), (2) one KRI per governance rule (analysis populations, interim analysis triggers, alpha spending, study end definition, data locks)
 - OPS: IMP handling, blinding, records, compliance
 
 ### Step 2.5 — Section Obligation Inventory (MANDATORY, runs after each domain extraction)
@@ -545,7 +547,7 @@ After completing the 10-agent extraction for a domain (and before proceeding to 
 
 **Step 3C — Consistency**: Same procedure across visits must have consistent details.
 
-**Step 3D — Full Verbatim Verification (MANDATORY BLOCKING GATE)**: Run `scripts/step3d_verify.py` against the PDF to verify every single KRI's `supporting_quote` is a verbatim substring of the cited page text. **The pipeline cannot advance to Step 4A until this step reports 100% pass.** See details below.
+**Step 3D — Full Verbatim Verification (MANDATORY BLOCKING GATE)**: Run `scripts/step3d_verify.py` against the PDF to verify every single KRI's `supporting_quote` is a verbatim substring of the cited page text. **The pipeline cannot advance to Step 4A until this step reports 100% pass.** A `supporting_quote` that cannot be found verbatim in the cited page is a **fabricated quote** — a hard pipeline failure. Not a warning, not a soft flag. The pipeline stops immediately. The KRI must be corrected before proceeding. No exceptions. See details below.
 
 ### Phase 4 — Assemble + Compare
 **Step 4A — Assembly**: Run `scripts/step4a_assemble.py` to merge all category files → `extracted_kris.json` + `Extracted_KRIs.xlsx`. The Excel workbook has one sheet per domain (SOA, ELIG, SAF, END, OPS, NDEF) plus a Summary sheet. **Exact column structure — no deviations:**
@@ -561,6 +563,8 @@ After completing the 10-agent extraction for a domain (and before proceeding to 
 | Severity | `severity` | 12 |
 
 No "Domain" column. No separate "Protocol Reference" column. No separate "Supporting Quote" column. The `combined_ref` field is the single source for the reference column.
+
+**Final summary (mandatory)**: At the end of every completed run, print and log a domain-by-domain KRI count: total per domain (SOA, ELIG, SAF, END, OPS, NDEF) and grand total. Confirm the assembled `extracted_kris.json` is the approved Golden Set for this protocol.
 
 **Step 4B — Golden Set Prompt**: After assembly, ask the user if a golden set is available.
 **Step 4C — Golden Set Comparison**: Category-by-category LLM comparison with protocol evidence for every difference.
@@ -1018,6 +1022,7 @@ Each pipeline run produces these files in the output directory:
 16. **Quote anchoring — one obligation per quote**: The `supporting_quote` must be the **shortest possible verbatim segment** from the protocol that anchors exactly ONE verifiable obligation. Never bundle multiple independent obligations into a single `supporting_quote`. If a sentence contains two independently verifiable rules (e.g., a dose definition AND a reporting timeline), split them into two KRIs with separate quotes. A quote that covers multiple obligations will be flagged during Step 3B accuracy judging for atomicity split. Long quotes (>200 characters) covering multiple clauses are automatically suspect — trim to the clause(s) that matter for this specific KRI's check.
 17. **Discard traceability — empty reason is a pipeline error**: Every discarded KRI (at any stage: Tier 3 pipeline, de-duplication, domain validation) MUST have a non-empty `reason` field in its discard record. The reason must either: (a) name the covering KRI ID (e.g., "Covered by SAF-AE-004 — same obligation, same section"), OR (b) clearly explain why the cited text does not constitute a valid, atomically verifiable obligation. An empty, null, or placeholder reason (e.g., "N/A", "see above") is a pipeline error that blocks the run. The Compliance Monitor must verify that all discard records across all artifacts (`{domain}_tier3_filtered.json`, `dedup_report.json`, validation logs) have non-empty reasons before allowing Phase 4 assembly.
 18. **Definitional rules are KRIs**: Protocol sentences that define inclusion/exclusion boundaries for clinical concepts are valid KRIs. A sentence of the form "X is defined as...", "X does not include Y when...", or "X is not considered Y unless..." encodes a verifiable rule — a site can deviate by applying the wrong definition. Extract one KRI per definitional sentence. Domain assignment: SAF for adverse event/safety definitions; OPS for operational definitions; ELIG for eligibility criteria definitions. Do NOT skip definitional rules on the assumption that they are "just context" — they are independently verifiable and sites do misapply them.
+19. **`rule_for_llm` must be binary and machine-readable (non-NDEF KRIs only)**: For all KRIs that are NOT classified as NDEF, the `rule_for_llm` field must be binary, unambiguous, and machine-readable — written as a precise, checkable instruction for an LLM system. It must specify exactly WHAT to check, WHEN to check it, HOW to verify compliance, and in relation to WHAT protocol requirement. It must produce a clear YES/NO answer when applied to a data record. It must NOT be narrative prose, a paraphrase of the protocol, or a vague description of intent. Examples of violations: "Ensure the procedure was performed correctly" (not binary), "Check the endpoint definition" (not specific), "The study drug was administered" (not an instruction). NDEF KRIs are explicitly excluded from this requirement — by definition, NDEF rules cannot be expressed as a binary verifiable instruction (that is why they are NDEF), and their `rule_for_llm` instead uses the fixed format: `"NDEF — Non-verifiable: [reason why LLM cannot verify]"`.
 
 ### SOA Domain — Reference and Quote Rules (MANDATORY, NO EXCEPTIONS)
 
@@ -1049,6 +1054,10 @@ Some footnotes are long and cover multiple distinct topics (e.g., Footnote 1 in 
 - Example: KRI "IP After Blood Draws" must quote "subjects should self-inject IP only after blood samples have been collected" — NOT the fasting sentence that starts the footnote
 - If a KRI's topic comes from a DIFFERENT footnote than its procedure's default, cite the correct footnote (e.g., "IP After Blood Draws" is in Footnote 20, not Footnote 1, even though the IP dispensing procedure maps to Footnote 20)
 - NEVER give all KRIs under the same footnote the same generic excerpt. Each KRI quotes the part relevant to its specific check.
+
+**Single-topic vs. multi-topic threshold**: A footnote is single-topic if it covers only one verifiable obligation or applies to only one procedure/visit combination — copy the ENTIRE footnote verbatim into every KRI it applies to. A footnote is multi-topic if it contains separate information for multiple procedures, visits, or obligations — each KRI receives ONLY the specific sentence(s) relevant to its particular procedure/visit. Never copy an entire multi-topic footnote into a KRI that only relates to part of it.
+
+**E. Visit scope accuracy (MANDATORY)**: Cross-protocol SOA rules that apply to only some visits must NEVER be labeled 'all visits.' The `kri_name`, `description`, and `rule_for_llm` must accurately reflect the exact visits the rule covers. If a footnote or cross-visit rule applies only to V1, V3, and V5, the KRI must name those visits explicitly — not use 'all visits' as a shorthand.
 
 ---
 
@@ -1168,6 +1177,7 @@ The pipeline MUST NOT proceed to de-duplication for that domain until the user h
 | KRI ID | Proposed ID (e.g., `SAF-AE-007`) |
 | Tier | `T2` or `T3-PROMOTED` |
 | KRI Name | Short descriptive name |
+| Description | 1-2 sentence description of what this KRI monitors and why it matters |
 | Agents | Count + breakdown (e.g., `5/10 (3C+2G)`) |
 | Protocol Ref | Section + page |
 | Supporting Quote | Verbatim excerpt (first 80 chars shown, expandable) |
