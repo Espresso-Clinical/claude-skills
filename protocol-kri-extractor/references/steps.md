@@ -1077,6 +1077,55 @@ Apply all deletions, then re-save `extracted_kris.json` and re-run Step 4A Excel
 
 ---
 
+## Step 2.5 — Section Obligation Inventory (MANDATORY, runs after each domain extraction)
+
+**Purpose**: After completing extraction for a domain (and before proceeding to Phase 3), scan every sentence in that domain's assigned protocol sections for obligation markers. This catches obligations that all 10 agents missed.
+
+**Input**: Full text of all protocol sections assigned to this domain (from `manifest.json`) + all KRIs already extracted for this domain.
+
+**Process**:
+
+1. **Scan every sentence** in the domain's protocol sections for obligation markers:
+   - Hard obligations: "must", "shall", "is required to", "is prohibited"
+   - Temporal obligations: "within [N] hours/days/weeks", "no later than", "at least [N] days before"
+   - Submission obligations: "submitted to", "reported to", "notified", "communicated to"
+   - Definitional boundaries: "is defined as", "does not include", "is not [X] when", "excludes"
+   - Dose/threshold triggers: "if [condition], then [action]", "≤ [value]", "≥ [value]"
+
+2. **For each obligation sentence found**, check whether it is covered by an existing KRI's `supporting_quote` (via substring match after normalizing whitespace).
+
+3. **Uncovered obligation sentences** → automatically promoted to **Tier 3** for the Tier 3 Promotion Pipeline (Step T3-1 → T3-2 → T3-3 → decision table).
+
+4. **Save artifact**: `{out_dir}/{domain}_obligation_inventory.json`
+
+```json
+{
+  "domain": "SAF",
+  "sections_scanned": ["Section 7.1", "Section 7.2", "..."],
+  "total_obligation_sentences": 84,
+  "covered": 71,
+  "uncovered": 13,
+  "obligations": [
+    {
+      "sentence": "All SAEs must be reported to the sponsor within 24 hours.",
+      "page": 55,
+      "covered_by": "SAF-AE-003",
+      "status": "covered"
+    },
+    {
+      "sentence": "Blood pressure must be measured in the sitting position.",
+      "page": 62,
+      "covered_by": null,
+      "status": "uncovered — promoted to Tier 3"
+    }
+  ]
+}
+```
+
+**Blocking**: Domain processing does not advance to Phase 3 until this artifact is written and all uncovered obligations have entered the Tier 3 pipeline.
+
+---
+
 ## Step 3A — Completeness Check
 
 **Purpose**: Verify every ontology procedure × visit has a KRI. Run once per category.
@@ -1871,3 +1920,87 @@ After saving the JSON, present a human-readable summary:
    for the most impactful differences (DIVERGENT first, then SUBSET)
 4. **Coverage gaps** — missing and extra KRIs with protocol support status
 5. **Recommendations** — which categories or specific KRIs to fix if score < 80
+
+---
+
+## Step 3D — Full Verbatim Verification (MANDATORY BLOCKING GATE)
+
+**Purpose**: Verify that every KRI's `supporting_quote` is a verbatim substring of the text on its cited protocol page. Deterministic — no LLM. Must reach 100% pass before Step 4A can begin.
+
+**Run**: `python scripts/step3d_verify.py --pdf /path/to/protocol.pdf --json /path/to/extracted_kris.json`
+
+**How it works**:
+1. Load all KRIs from `extracted_kris.json`
+2. Extract all PDF pages into an in-memory cache using pdfplumber
+3. For each KRI:
+   - Parse the page range from `protocol_reference` (handles `p.X`, `p.X-p.Y`)
+   - Search the cited page range ±2 pages for `norm(supporting_quote)` as a substring of `norm(page_text)`, where `norm` collapses all whitespace to single spaces
+   - **PASS**: quote found → save stripped quote and recompute `combined_ref`
+   - **AUTO-CORRECT**: quote found on a different page than cited → update `protocol_reference` and `combined_ref`, log the correction
+   - **FAIL**: quote not found anywhere in range → must be fixed manually
+
+4. Save backup before writing corrected JSON (`extracted_kris.pre_verify.json`)
+5. Write corrected `extracted_kris.json`
+6. Save `{out_dir}/verify_report.json`
+
+**Known PDF quirks to handle**:
+- Curly apostrophes (`\u2019` `'`) vs straight (`'`) — must match the PDF's actual character
+- Private-use characters (e.g., `\uf0b1` for ±) — copy from pdfplumber output, not typed
+- Merged words (e.g., "IPadministration", "14days") — pdfplumber strips spaces at word boundaries in some PDFs
+
+**Blocking gate**: If `verify_report.json` shows any FAIL, the pipeline stops. Fix each failing KRI (correct the quote or the page reference), then re-run Step 3D until 0 failures. Only then proceed to Step 4A.
+
+**Output — `verify_report.json`**:
+```json
+{
+  "_meta": { "step": "3D", "total": 675, "pass": 675, "auto_corrected": 3, "fail": 0, "gate": "PASS" },
+  "pass": ["SOA-V1-001", "SOA-V1-002", "..."],
+  "auto_corrected": [
+    { "kri_id": "END-STAT-002", "old_pg": 47, "new_pg": 48 }
+  ],
+  "fail": []
+}
+```
+
+---
+
+## Step 4D — Comparison Verification (runs after Step 4C)
+
+**Purpose**: Reconciliation pass to reduce false negatives and false positives in the Step 4C comparison report. Catches cases where the LLM comparison judged two semantically equivalent KRIs as DIVERGENT or MISSING due to wording differences.
+
+**Input**: `comparison_report.json` from Step 4C + full `extracted_kris.json` + golden set KRIs.
+
+**Process**:
+
+1. **False-negative scan (MISSING verdicts)**:
+   - For each golden KRI marked MISSING (no extracted match found), search the extracted KRI set for any KRI whose `rule_for_llm` contains the same key terms: procedure name + visit prefix + primary threshold/value (if any)
+   - If a match is found → reclassify as EQUIVALENT or SUBSET (whichever is more precise) and log the correction with the matching extracted KRI ID
+
+2. **False-positive scan (DIVERGENT verdicts)**:
+   - For each pair marked DIVERGENT, re-read both `rule_for_llm` texts and the cited protocol pages
+   - Confirm they truly check different clinical requirements — not just differently worded versions of the same check
+   - If they are the same check worded differently → reclassify as EQUIVALENT
+
+3. **Save output**: `{out_dir}/comparison_verified.json` with all reclassifications and a corrected score.
+
+```json
+{
+  "_meta": {
+    "step": "4D",
+    "original_score": 74.2,
+    "corrected_score": 81.5,
+    "reclassifications": 9
+  },
+  "reclassifications": [
+    {
+      "kri_id_golden": "ELIG-INC-012",
+      "original_verdict": "MISSING",
+      "corrected_verdict": "EQUIVALENT",
+      "matched_extracted_kri": "ELIG-INC-018",
+      "reason": "Same inclusion criterion, different wording"
+    }
+  ]
+}
+```
+
+**Blocking**: None — Step 4D is a reconciliation pass, not a blocking gate. Its output refines the comparison result but does not gate any subsequent step.

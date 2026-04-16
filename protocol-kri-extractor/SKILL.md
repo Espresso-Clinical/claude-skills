@@ -1222,7 +1222,7 @@ The regression vault preserves approved golden sets so that future skill updates
 **If the user says yes**, use the `kri-regression-tester` skill's freeze operation. Specifically, run:
 
 ```bash
-python ~/.claude/skills-repo/kri-regression-tester/scripts/freeze.py \
+python ~/.claude/skills-repo/plugins/kri-regression-tester/scripts/freeze.py \
   --source <run_directory> \
   --vault ~/Documents/kri-regression-vault \
   --protocol-id <protocol_id> \

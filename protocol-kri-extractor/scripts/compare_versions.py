@@ -11,7 +11,7 @@ import json
 import os
 import re
 
-BASE = "/Users/ron/Downloads/protocol Parser"
+BASE = os.environ.get("KRI_COMPARE_BASE", os.path.expanduser("~/Downloads/protocol Parser"))
 CATEGORIES = ["SOA", "ELIG", "SAF", "END", "OPS"]
 
 def load_kris(ver, cat):
