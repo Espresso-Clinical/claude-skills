@@ -198,23 +198,14 @@ def run_consistency_check(output_dir: str, pdf_path: str, ontology_path: str):
     print(f"  Tokens: {total_tokens}")
 
 if __name__ == "__main__":
-    PROTOCOLS = {
-        "ENX-CL-05-002": {
-            "dir": "/home/claude/protocol-kri-extractor/output/ENX-CL-05-002",
-            "pdf": "/mnt/user-data/uploads/ENX-CL-05-002_Clinical_Study_Protocol_v_2_0_Agatha_copy.pdf"
-        },
-        "B1481038": {
-            "dir": "/home/claude/protocol-kri-extractor/output/B1481038",
-            "pdf": "/mnt/user-data/uploads/Protocol_B1481038.pdf"
-        },
-        "LCZ696G2301": {
-            "dir": "/home/claude/protocol-kri-extractor/output/LCZ696G2301",
-            "pdf": "/mnt/user-data/uploads/Novartis__LCZ696G2301-_Phase_3_study_to_evaluate_the_efficacy_and_safety_of_LCZ696pdf.pdf"
-        }
-    }
-    target = sys.argv[1] if len(sys.argv) > 1 else "ENX-CL-05-002"
-    p = PROTOCOLS[target]
+    import argparse
+    parser = argparse.ArgumentParser(description="Step 3C — Consistency check")
+    parser.add_argument("--dir", required=True, help="Run directory (must contain ontology.json, raw_*.json)")
+    parser.add_argument("--pdf", required=True, help="Path to protocol PDF")
+    args = parser.parse_args()
+
     run_consistency_check(
-        p["dir"], p["pdf"],
-        os.path.join(p["dir"], "ontology.json")
+        args.dir,
+        args.pdf,
+        os.path.join(args.dir, "ontology.json")
     )

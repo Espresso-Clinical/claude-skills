@@ -359,36 +359,21 @@ def run_extraction(pdf_path: str, manifest_path: str, ontology_path: str,
     return all_results
 
 if __name__ == "__main__":
-    PROTOCOLS = {
-        "ENX-CL-05-002": {
-            "pdf": "/mnt/user-data/uploads/ENX-CL-05-002_Clinical_Study_Protocol_v_2_0_Agatha_copy.pdf",
-            "dir": "/home/claude/protocol-kri-extractor/output/ENX-CL-05-002"
-        },
-        "B1481038": {
-            "pdf": "/mnt/user-data/uploads/Protocol_B1481038.pdf",
-            "dir": "/home/claude/protocol-kri-extractor/output/B1481038"
-        },
-        "LCZ696G2301": {
-            "pdf": "/mnt/user-data/uploads/Novartis__LCZ696G2301-_Phase_3_study_to_evaluate_the_efficacy_and_safety_of_LCZ696pdf.pdf",
-            "dir": "/home/claude/protocol-kri-extractor/output/LCZ696G2301"
-        }
-    }
+    import argparse
+    parser = argparse.ArgumentParser(description="Step 2 — Extract KRIs from protocol")
+    parser.add_argument("--pdf",  required=True, help="Path to protocol PDF")
+    parser.add_argument("--dir",  required=True, help="Output directory (must contain manifest.json and ontology.json)")
+    parser.add_argument("--cats", default=None,  help="Comma-separated category list, e.g. SOA,ELIG (default: all)")
+    args = parser.parse_args()
 
-    target = sys.argv[1] if len(sys.argv) > 1 else "ENX-CL-05-002"
-    cats = sys.argv[2].split(",") if len(sys.argv) > 2 else None  # e.g. "SOA,ELIG"
-
-    if target not in PROTOCOLS:
-        print(f"Unknown protocol. Choose from: {list(PROTOCOLS.keys())}")
-        sys.exit(1)
-
-    p = PROTOCOLS[target]
+    cats = args.cats.split(",") if args.cats else None
     print(f"\n{'='*55}")
-    print(f"Extracting KRIs: {target}" + (f" (categories: {cats})" if cats else " (all categories)"))
+    print(f"Extracting KRIs: {os.path.basename(args.pdf)}" + (f" (categories: {cats})" if cats else " (all categories)"))
 
     run_extraction(
-        pdf_path=p["pdf"],
-        manifest_path=os.path.join(p["dir"], "manifest.json"),
-        ontology_path=os.path.join(p["dir"], "ontology.json"),
-        output_dir=p["dir"],
+        pdf_path=args.pdf,
+        manifest_path=os.path.join(args.dir, "manifest.json"),
+        ontology_path=os.path.join(args.dir, "ontology.json"),
+        output_dir=args.dir,
         categories=cats
     )

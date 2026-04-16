@@ -145,44 +145,27 @@ Rules:
     return manifest
 
 if __name__ == "__main__":
-    protocols = [
-        {
-            "id": "ENX-CL-05-002",
-            "path": "/mnt/user-data/uploads/ENX-CL-05-002_Clinical_Study_Protocol_v_2_0_Agatha_copy.pdf",
-            "out":  "/home/claude/protocol-kri-extractor/output/ENX-CL-05-002/manifest.json"
-        },
-        {
-            "id": "B1481038",
-            "path": "/mnt/user-data/uploads/Protocol_B1481038.pdf",
-            "out":  "/home/claude/protocol-kri-extractor/output/B1481038/manifest.json"
-        },
-        {
-            "id": "LCZ696G2301",
-            "path": "/mnt/user-data/uploads/Novartis__LCZ696G2301-_Phase_3_study_to_evaluate_the_efficacy_and_safety_of_LCZ696pdf.pdf",
-            "out":  "/home/claude/protocol-kri-extractor/output/LCZ696G2301/manifest.json"
-        },
-    ]
-    
-    target = sys.argv[1] if len(sys.argv) > 1 else "all"
-    
-    for p in protocols:
-        if target != "all" and p["id"] != target:
-            continue
-        print(f"\n{'='*55}")
-        print(f"Building manifest: {p['id']}")
-        try:
-            manifest = build_manifest(p["path"], p["id"])
-            with open(p["out"], "w") as f:
-                json.dump(manifest, f, indent=2)
-            print(f"  Saved → {p['out']}")
-            # Summary
-            total_sections = sum(len(v) for k, v in manifest["section_map"].items())
-            print(f"  Sections mapped: {total_sections}")
-            for cat, sections in manifest["section_map"].items():
-                if sections:
-                    titles = [s["section_number"] + " " + s["title"][:35] for s in sections]
-                    print(f"    {cat}: {titles}")
-            print(f"  Tokens: {manifest['_meta']['tokens_used']}")
-        except Exception as e:
-            print(f"  ERROR: {e}")
-            import traceback; traceback.print_exc()
+    import argparse
+    parser = argparse.ArgumentParser(description="Step 1A — Build protocol manifest")
+    parser.add_argument("--pdf",      required=True, help="Path to protocol PDF")
+    parser.add_argument("--protocol", required=True, help="Protocol ID (e.g. B1481038)")
+    parser.add_argument("--out",      required=True, help="Output path for manifest.json")
+    args = parser.parse_args()
+
+    print(f"\n{'='*55}")
+    print(f"Building manifest: {args.protocol}")
+    try:
+        manifest = build_manifest(args.pdf, args.protocol)
+        with open(args.out, "w") as f:
+            json.dump(manifest, f, indent=2)
+        print(f"  Saved → {args.out}")
+        total_sections = sum(len(v) for v in manifest["section_map"].values())
+        print(f"  Sections mapped: {total_sections}")
+        for cat, sections in manifest["section_map"].items():
+            if sections:
+                titles = [s["section_number"] + " " + s["title"][:35] for s in sections]
+                print(f"    {cat}: {titles}")
+        print(f"  Tokens: {manifest['_meta']['tokens_used']}")
+    except Exception as e:
+        print(f"  ERROR: {e}")
+        import traceback; traceback.print_exc()
