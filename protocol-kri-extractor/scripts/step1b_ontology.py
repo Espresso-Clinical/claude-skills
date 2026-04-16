@@ -164,46 +164,27 @@ def print_summary(ontology: dict):
             print(f"    - {r[:90]}")
 
 if __name__ == "__main__":
-    protocols = [
-        {
-            "id": "ENX-CL-05-002",
-            "path": "/mnt/user-data/uploads/ENX-CL-05-002_Clinical_Study_Protocol_v_2_0_Agatha_copy.pdf",
-            "manifest": "/home/claude/protocol-kri-extractor/output/ENX-CL-05-002/manifest.json",
-            "out":      "/home/claude/protocol-kri-extractor/output/ENX-CL-05-002/ontology.json"
-        },
-        {
-            "id": "B1481038",
-            "path": "/mnt/user-data/uploads/Protocol_B1481038.pdf",
-            "manifest": "/home/claude/protocol-kri-extractor/output/B1481038/manifest.json",
-            "out":      "/home/claude/protocol-kri-extractor/output/B1481038/ontology.json"
-        },
-        {
-            "id": "LCZ696G2301",
-            "path": "/mnt/user-data/uploads/Novartis__LCZ696G2301-_Phase_3_study_to_evaluate_the_efficacy_and_safety_of_LCZ696pdf.pdf",
-            "manifest": "/home/claude/protocol-kri-extractor/output/LCZ696G2301/manifest.json",
-            "out":      "/home/claude/protocol-kri-extractor/output/LCZ696G2301/ontology.json"
-        },
-    ]
+    import argparse
+    parser = argparse.ArgumentParser(description="Step 1B — Build protocol ontology")
+    parser.add_argument("--pdf",      required=True, help="Path to protocol PDF")
+    parser.add_argument("--manifest", required=True, help="Path to manifest.json from Step 1A")
+    parser.add_argument("--out",      required=True, help="Output path for ontology.json")
+    args = parser.parse_args()
 
-    target = sys.argv[1] if len(sys.argv) > 1 else "all"
-
-    for p in protocols:
-        if target != "all" and p["id"] != target:
-            continue
-        print(f"\n{'='*55}")
-        print(f"Building ontology: {p['id']}")
-        if not os.path.exists(p["manifest"]):
-            print(f"  ERROR: manifest not found at {p['manifest']} — run step1a first")
-            continue
-        with open(p["manifest"]) as f:
-            manifest = json.load(f)
-        try:
-            ontology = build_ontology(p["path"], manifest)
-            with open(p["out"], "w") as f:
-                json.dump(ontology, f, indent=2)
-            print(f"  Saved → {p['out']}")
-            print_summary(ontology)
-            print(f"  Tokens: {ontology['_meta']['tokens_used']}")
-        except Exception as e:
-            print(f"  ERROR: {e}")
-            import traceback; traceback.print_exc()
+    print(f"\n{'='*55}")
+    print(f"Building ontology from: {os.path.basename(args.pdf)}")
+    if not os.path.exists(args.manifest):
+        print(f"  ERROR: manifest not found at {args.manifest} — run step1a first")
+        sys.exit(1)
+    with open(args.manifest) as f:
+        manifest = json.load(f)
+    try:
+        ontology = build_ontology(args.pdf, manifest)
+        with open(args.out, "w") as f:
+            json.dump(ontology, f, indent=2)
+        print(f"  Saved → {args.out}")
+        print_summary(ontology)
+        print(f"  Tokens: {ontology['_meta']['tokens_used']}")
+    except Exception as e:
+        print(f"  ERROR: {e}")
+        import traceback; traceback.print_exc()

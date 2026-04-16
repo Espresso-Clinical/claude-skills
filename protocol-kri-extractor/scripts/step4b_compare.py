@@ -280,17 +280,15 @@ def run_comparison(extracted_path: str, golden_path: str, output_dir: str):
     print(f"  Total tokens: {total_tokens}")
 
 if __name__ == "__main__":
-    PROTOCOLS = {
-        "ENX-CL-05-002": {
-            "dir":    "/home/claude/protocol-kri-extractor/output/ENX-CL-05-002",
-            "golden": "/mnt/user-data/uploads/golden_set.json"
-        }
-    }
-    target = sys.argv[1] if len(sys.argv) > 1 else "ENX-CL-05-002"
-    golden = sys.argv[2] if len(sys.argv) > 2 else PROTOCOLS[target]["golden"]
-    d = PROTOCOLS[target]["dir"]
+    import argparse
+    parser = argparse.ArgumentParser(description="Step 4B — Compare extracted KRIs against golden set")
+    parser.add_argument("--extracted", required=True, help="Path to extracted_kris.json")
+    parser.add_argument("--golden",    required=True, help="Path to golden_set.json")
+    parser.add_argument("--dir",       required=True, help="Output directory for comparison report")
+    args = parser.parse_args()
+
     run_comparison(
-        extracted_path=os.path.join(d, "extracted_kris.json"),
-        golden_path=golden,
-        output_dir=d
+        extracted_path=args.extracted,
+        golden_path=args.golden,
+        output_dir=args.dir
     )

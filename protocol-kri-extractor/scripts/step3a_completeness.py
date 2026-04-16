@@ -203,11 +203,13 @@ def run_completeness_check(output_dir: str, manifest_path: str, ontology_path: s
     print(f"  Total tokens: {total_tokens}")
 
 if __name__ == "__main__":
-    PROTOCOLS = {
-        "ENX-CL-05-002": "/home/claude/protocol-kri-extractor/output/ENX-CL-05-002",
-        "B1481038":       "/home/claude/protocol-kri-extractor/output/B1481038",
-        "LCZ696G2301":    "/home/claude/protocol-kri-extractor/output/LCZ696G2301"
-    }
-    target = sys.argv[1] if len(sys.argv) > 1 else "ENX-CL-05-002"
-    d = PROTOCOLS[target]
-    run_completeness_check(d, os.path.join(d, "manifest.json"), os.path.join(d, "ontology.json"))
+    import argparse
+    parser = argparse.ArgumentParser(description="Step 3A — Completeness check")
+    parser.add_argument("--dir", required=True, help="Run directory (must contain manifest.json, ontology.json, raw_*.json)")
+    args = parser.parse_args()
+
+    run_completeness_check(
+        args.dir,
+        os.path.join(args.dir, "manifest.json"),
+        os.path.join(args.dir, "ontology.json")
+    )
