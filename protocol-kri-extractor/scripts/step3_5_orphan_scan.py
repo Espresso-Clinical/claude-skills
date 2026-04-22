@@ -49,7 +49,11 @@ CLAUDE_MODEL = "claude-sonnet-4-20250514"
 N_CLAUDE_AGENTS = 3
 N_GEMINI_AGENTS = 3
 N_PANEL = N_CLAUDE_AGENTS + N_GEMINI_AGENTS  # 6
-DOMAINS = ["SOA", "ELIG", "SAF", "END", "OPS", "NDEF"]
+DOMAINS = ["SOA", "ELIG", "SAF", "END", "OPS"]
+# NDEF is intentionally excluded here: orphans are classified into one of the 5
+# real domains. Reclassification to NDEF happens post-assembly in the NDEF Sweep
+# (Step 4A-NDEF, scripts/step4a_ndef_sweep.py).
+FALLBACK_DOMAIN = "OPS"  # Used when an agent proposes an unknown domain.
 
 DOMAIN_LABELS = {
     "SOA": "Schedule of Activities",
@@ -57,7 +61,6 @@ DOMAIN_LABELS = {
     "SAF": "Safety & Toxicity",
     "END": "Endpoints & Statistics",
     "OPS": "Operations & Compliance",
-    "NDEF": "Non-Definable",
 }
 
 SYSTEM_PROMPT = (
@@ -144,7 +147,7 @@ Find every rule-like statement that is NOT already covered by one of the existin
     "candidate_text": "the rule-like statement as a verbatim or near-verbatim excerpt from the protocol (<=30 words)",
     "page": <page number where it appears>,
     "surrounding_context": "<=50 words of context around the statement for disambiguation",
-    "proposed_domain": "SOA|ELIG|SAF|END|OPS|NDEF",
+    "proposed_domain": "SOA|ELIG|SAF|END|OPS",
     "reason_not_covered": "brief explanation of why this is not already covered by an existing KRI"
   }},
   ...
@@ -407,9 +410,9 @@ def _clean_quote(text, max_words=30):
 
 def build_orphan_kri(candidate, orphan_idx, existing_section_hint=None):
     """Build a full KRI record from a promoted candidate."""
-    domain = candidate.get("proposed_domain", "NDEF")
+    domain = candidate.get("proposed_domain", FALLBACK_DOMAIN)
     if domain not in DOMAINS:
-        domain = "NDEF"
+        domain = FALLBACK_DOMAIN
 
     pg = candidate.get("page")
     section_hint = existing_section_hint or candidate.get("_section") or "Orphan Scan"
@@ -427,7 +430,7 @@ def build_orphan_kri(candidate, orphan_idx, existing_section_hint=None):
             f"Supporting agents: {candidate.get('agent_count', 0)}/{N_PANEL}."
         ),
         "category_id": domain,
-        "category_label": DOMAIN_LABELS.get(domain, "Non-Definable"),
+        "category_label": DOMAIN_LABELS.get(domain, DOMAIN_LABELS[FALLBACK_DOMAIN]),
         "rule_for_llm": rule,
         "protocol_reference": ref,
         "supporting_quote": quote,
@@ -565,9 +568,9 @@ def run_orphan_scan(output_dir, pdf_path):
 
     for c in promoted:
         # Use a per-domain counter so IDs are ORPH-SAF-001, ORPH-SAF-002, etc.
-        tentative_domain = c.get("proposed_domain", "NDEF")
+        tentative_domain = c.get("proposed_domain", FALLBACK_DOMAIN)
         if tentative_domain not in DOMAINS:
-            tentative_domain = "NDEF"
+            tentative_domain = FALLBACK_DOMAIN
         per_domain_counters[tentative_domain] += 1
         idx = per_domain_counters[tentative_domain]
 

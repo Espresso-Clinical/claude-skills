@@ -225,7 +225,7 @@ Six categories (universal across all trials — from ICH GCP):
 - **SAF** — Safety & Toxicity
 - **END** — Endpoints, Statistics & Governance (see detailed sub-categories below)
 - **OPS** — Operations & Compliance
-- **NDEF** — Non-Definable: eligibility criteria or rules based on investigator clinical judgment that cannot be expressed as a binary verifiable rule. Rule format: `"NDEF — Non-verifiable: [reason why LLM cannot verify]"`. These are documented so auditors know the criterion exists but flagged as out-of-scope for automated monitoring. **NDEF KRIs use the same column format as all other domains: KRI ID, KRI Name, Category, Description, Rule for LLM, Protocol Reference & Quote. NDEF is not a reduced-format domain.**
+- **NDEF** — Non-Definable: the final-output classification for KRIs whose rule cannot be verified by a machine in an unambiguous, deterministic way. **NDEF is NOT an extraction target.** Phase 2 extractors place every rule into one of the 5 real domains (SOA/ELIG/SAF/END/OPS). The NDEF category is populated later by the **NDEF Sweep** (Step 4A-NDEF), which runs after Phase 2 extraction, the orphan scan, Step 4A assembly, and dedup — it reviews every extracted KRI and *moves* any whose rule cannot be checked deterministically out of its source domain and into NDEF. A KRI qualifies as non-definable if its rule cannot produce a clear YES/NO answer when applied to subject data — this includes investigator clinical judgment ("in the opinion of", "if clinically significant"), undefined time windows ("as soon as possible", "in a timely manner", "promptly"), undefined effort or quantity ("reasonable effort", "adequate", "sufficient"), subjective thresholds, or any other non-binary wording. Rule format for NDEF entries: `"NDEF — Non-verifiable: [reason why LLM cannot verify]"`. NDEF KRIs are documented so auditors know the obligation exists but flagged as out-of-scope for automated monitoring. **NDEF KRIs use the same column format as all other domains: KRI ID, KRI Name, Category, Description, Rule for LLM, Protocol Reference & Quote. NDEF is not a reduced-format domain.**
 
 ---
 
@@ -281,12 +281,19 @@ OPS contains:
 
 **OPS/SAF boundary for protocol deviations**: OPS owns protocol deviation as a GCP compliance document — logging, categorization, and reporting. If a deviation triggers a clinical safety response (e.g., deviation from a stopping rule requiring clinical action), that KRI belongs in SAF.
 
-### Rule 4 — NDEF for investigator-judgment rules that an LLM cannot verify
+### Rule 4 — NDEF is a post-extraction classification, not an extraction target
 
-NDEF includes any rule where compliance depends on real-time clinical judgment by the investigator, such as:
-- Emergency unblinding decisions (investigator determines medical necessity)
-- Causality determinations for immediate-notification AE rules ("immediately notify if clinically significant" — the determination of "clinically significant" is judgment-based)
-- Any exclusion criterion framed as "in the investigator's opinion" that has no objective measurable proxy
+NDEF is **not** a domain that Phase 2 extractors populate. During extraction, every rule goes into one of the 5 real domains (SOA/ELIG/SAF/END/OPS) using Rules 1–3. NDEF is populated later by the **NDEF Sweep** (Step 4A-NDEF), which runs after Phase 2 extraction, the orphan scan, Step 4A assembly, and dedup. The sweep applies the criteria below to every extracted KRI and **moves** matching KRIs out of their source domain into NDEF.
+
+A KRI is **non-definable** — and therefore belongs in NDEF — if its rule cannot produce a deterministic, unambiguous YES/NO answer when applied to a subject's data. This is a broad definition and includes (but is not limited to):
+
+- **Investigator judgment** — wording like "in the investigator's opinion", "if clinically significant", "clinically relevant", "per clinical judgment". Examples: emergency unblinding decisions (investigator determines medical necessity); causality determinations framed as "immediately notify if clinically significant"; exclusion criteria framed as "in the investigator's opinion" with no objective measurable proxy.
+- **Undefined time windows** — "as soon as possible", "in a timely manner", "promptly", "without undue delay", "reasonable time" — no concrete numeric window the data can be compared against.
+- **Undefined effort, quantity, or completeness** — "reasonable effort", "adequate", "sufficient", "appropriate", "best effort" — no concrete threshold.
+- **Subjective thresholds** — any criterion whose threshold is a qualitative judgment rather than a measurable value.
+- **Any other non-binary wording** — if the rule cannot be rewritten as a concrete check against a data field with a deterministic YES/NO answer, it is non-definable.
+
+Phase 2 extractors do NOT attempt to classify KRIs as NDEF. They extract every rule (including judgment-based and vague ones) into the real domain the rule belongs to. The sweep then performs reclassification in one consistent pass using a judge panel — this produces more consistent NDEF boundaries than having each domain extractor make its own call. See "CRITICAL — NDEF Sweep" below for the full spec.
 
 ---
 
@@ -393,6 +400,64 @@ Two KRIs from **different numbered protocol subsections** (e.g., §8.7 and §8.1
 
 ---
 
+## CRITICAL — NDEF Sweep (Step 4A-NDEF, MANDATORY, runs AFTER dedup)
+
+The NDEF Sweep is the single place where KRIs are reclassified into NDEF. It runs once per extraction, after Step 4A assembly and after Step 4A-Dedup, and before the Final summary. It is mandatory — no run may finalize without it.
+
+**What it does**: reviews every KRI in the assembled set across the 5 real domains (SOA/ELIG/SAF/END/OPS) and **moves** any KRI whose rule is not machine-checkable into NDEF. This is a MOVE, not a copy — the source domain no longer contains the KRI after the sweep.
+
+**Why it is centralized here (not done by the extractors)**: Phase 2 agents see only their own domain and would each make their own NDEF judgment, producing inconsistent boundaries (e.g., ELIG agent flags a judgment-based criterion as NDEF, SAF agent leaves a similar one in SAF). A single post-assembly pass with a judge panel applies one consistent standard across the whole set.
+
+### What qualifies as non-definable (binding definition — same criteria as Rule 4)
+
+A KRI is non-definable if its `rule_for_llm` cannot produce a deterministic YES/NO answer when applied to concrete subject data. This includes:
+
+- **Investigator judgment**: "in the investigator's opinion", "if clinically significant", "clinically relevant", "per clinical judgment", emergency unblinding decisions.
+- **Undefined time windows**: "as soon as possible", "in a timely manner", "promptly", "without undue delay", "reasonable time".
+- **Undefined effort, quantity, or completeness**: "reasonable effort", "adequate", "sufficient", "appropriate", "best effort".
+- **Subjective thresholds**: thresholds expressed as qualitative judgments rather than measurable values.
+- **Any other non-binary wording**: any rule that cannot be rewritten as a concrete check against a data field with a deterministic YES/NO answer.
+
+A KRI stays in its source domain if it has a concrete check — even if it is complex — such as a numeric threshold, a specific time window (e.g., "within 24 hours", "≤30 days"), a named data field, or a countable event.
+
+### How the sweep works
+
+**Input**: the assembled `extracted_kris.json` plus the 5 `raw_{DOMAIN}.json` files, after dedup.
+
+**Process**: a 6-agent judge panel (3 Claude + 3 Gemini) reviews each KRI independently and votes `DEFINABLE` / `NON_DEFINABLE` with a one-sentence reason. Consensus tiers are the same as other panels in this skill:
+
+| Vote distribution | Action |
+|---|---|
+| **5–6 agents vote NON_DEFINABLE** | Auto-move to NDEF (no user review). |
+| **3–4 agents vote NON_DEFINABLE** | Present to user in a decision table with agent vote breakdown and quoted reasons; user decides per-KRI. |
+| **0–2 agents vote NON_DEFINABLE** | Keep in source domain. |
+
+Each moved KRI:
+- Has its `category_id` changed to `"NDEF"` and `category_label` to `"Non-Definable"`.
+- Gets a new `kri_id` in the `NDEF-###` sequence (keeping `original_kri_id` in a sidecar field for audit).
+- Has `rule_for_llm` rewritten to the fixed NDEF format: `"NDEF — Non-verifiable: [reason why LLM cannot verify]"` (reason comes from the panel consensus).
+- Gets an `original_domain` field set to the source domain, for the audit trail.
+- Keeps its original `protocol_reference`, `supporting_quote`, `combined_ref`, `description` unchanged — the rule's source in the protocol does not move.
+
+**Output**:
+- `raw_NDEF.json` — all newly-classified NDEF entries.
+- `ndef_sweep_report.json` — per-KRI vote breakdown, reasons, and user decisions (audit trail).
+- Updated `raw_{SOURCE_DOMAIN}.json` files with the moved KRIs removed.
+- Updated `extracted_kris.json` reflecting the final classification.
+
+**Atomicity / dedup interaction**: the sweep operates AFTER dedup, so atomization splits and cross-domain dedup decisions are already resolved. The sweep does not merge, split, or delete KRIs — it only moves them between domains.
+
+**Idempotence**: running the sweep twice on the same assembled set produces the same output (no second-round movements, unless user decisions on the T3 tier change).
+
+### What the sweep does NOT do
+
+- It does NOT extract new KRIs. Phase 2 and the orphan scan are the only sources of KRIs.
+- It does NOT merge or split KRIs. Dedup and atomization handle those concerns.
+- It does NOT delete KRIs. Every KRI stays in the assembled output — it either remains in its source domain or is moved to NDEF.
+- It does NOT re-run if a user rejects a proposed move — the KRI stays in its source domain and the decision is logged.
+
+---
+
 ### END Domain — Two Mandatory Sub-Categories
 
 The END domain must produce KRIs in two sub-categories. All use `category_id: "END"` and `category_label: "Endpoints & Statistics"`.
@@ -477,7 +542,7 @@ Read `references/steps.md` for the detailed prompt templates and logic for each 
 
 ### Phase 1 — Discover
 
-**Step 1A — Manifest**: Read cover pages + TOC. Map every section to SOA/ELIG/SAF/END/OPS/NDEF.
+**Step 1A — Manifest**: Read cover pages + TOC. Map every section to SOA/ELIG/SAF/END/OPS. (NDEF is not an extraction target — it is populated post-assembly by the NDEF Sweep. See Rule 4.)
 
 **Step 1B-Camelot — Table Extraction (PRIMARY)**: Use Camelot (lattice mode) via `scripts/camelot_table_extractor.py` to extract the SoA table into `soa_table.csv` and `soa_table.json`. This is the **PRIMARY** source of truth for the SoA procedure × visit grid. Camelot reads table line geometry from the PDF and gives ~99% structural accuracy — deterministic, reproducible, and not affected by LLM variance. Handles multi-page tables automatically. The CSV and JSON outputs become the canonical SoA data for all downstream steps.
 
@@ -501,7 +566,7 @@ The SOA extraction follows a strict 6-step process:
 6. **Self-verification**: Cross-check that every X cell in the Camelot CSV has a corresponding KRI. Report: `N/N cells covered = 100%`.
 
 For non-SOA categories (ELIG, SAF, END, OPS), extraction uses a **10-agent multi-model panel** (5 Claude Sonnet + 5 Gemini 2.5 Pro agents running in parallel). Consensus determines tier: **Tier 1** = 7–10 agents agree (auto-approved), **Tier 2** = 4–6 agents agree (decision table shown to user, pipeline pauses for approval), **Tier 3** = 1–3 agents (enters Tier 3 promotion pipeline). Per-domain content rules:
-- ELIG: one KRI per criterion/sub-criterion; criteria based on pure investigator judgment → NDEF
+- ELIG: one KRI per criterion/sub-criterion. Extract every criterion into ELIG regardless of whether it is objectively verifiable — judgment-based or vaguely-worded criteria are reclassified to NDEF later by the NDEF Sweep (Step 4A-NDEF), not by the extractor.
 - SAF: every reporting timeline, stopping rule, emergency protocol
 - END: **two sub-categories** — (1) one KRI per endpoint definition (primary, each key secondary, each other secondary individually, each biomarker analyte × measurement type, each HCRU metric), (2) one KRI per governance rule (analysis populations, interim analysis triggers, alpha spending, study end definition, data locks)
 - OPS: IMP handling, blinding, records, compliance
@@ -533,7 +598,7 @@ After completing the 10-agent extraction for a domain (and before proceeding to 
 
 ### Phase 3 — Validate (orphan scan + completeness + heuristics + full accuracy judging + consistency + mandatory full verbatim verification)
 
-**Step 3.5 — Protocol-Wide Orphan Scan (MANDATORY BLOCKING GATE, runs FIRST in Phase 3)**: Scan the ENTIRE protocol — section-by-section (primary) and page-by-page for any page not claimed by the section map (secondary sweep) — to find rule-like statements, obligations, thresholds, prohibitions, requirements, schedules, procedures, criteria, timings, or methods that were NOT captured by any domain extractor in Phase 2. Uses a **6-agent panel (3 Claude + 3 Gemini)** with high-recall candidate detection and consensus-based promotion. Promoted orphan KRIs are appended to the corresponding `raw_{DOMAIN}.json` file (or `raw_NDEF.json`) so they flow through the rest of Phase 3 validation like any other KRI. **The pipeline cannot advance to Step 3A until the orphan scan is complete and all user decisions are made.** See full spec below.
+**Step 3.5 — Protocol-Wide Orphan Scan (MANDATORY BLOCKING GATE, runs FIRST in Phase 3)**: Scan the ENTIRE protocol — section-by-section (primary) and page-by-page for any page not claimed by the section map (secondary sweep) — to find rule-like statements, obligations, thresholds, prohibitions, requirements, schedules, procedures, criteria, timings, or methods that were NOT captured by any domain extractor in Phase 2. Uses a **6-agent panel (3 Claude + 3 Gemini)** with high-recall candidate detection and consensus-based promotion. Promoted orphan KRIs are appended to the corresponding `raw_{DOMAIN}.json` file (one of the 5 real domains: SOA/ELIG/SAF/END/OPS) so they flow through the rest of Phase 3 validation like any other KRI. Orphans that appear non-definable are still appended to their parent domain — the NDEF Sweep (Step 4A-NDEF) handles reclassification post-assembly, not the orphan scan. **The pipeline cannot advance to Step 3A until the orphan scan is complete and all user decisions are made.** See full spec below.
 
 **Step 3A — Completeness**: Every Camelot CSV cell with "X" must have a KRI.
 
@@ -564,7 +629,13 @@ After completing the 10-agent extraction for a domain (and before proceeding to 
 
 No "Domain" column. No separate "Protocol Reference" column. No separate "Supporting Quote" column. The `combined_ref` field is the single source for the reference column.
 
-**Final summary (mandatory)**: At the end of every completed run, print and log a domain-by-domain KRI count: total per domain (SOA, ELIG, SAF, END, OPS, NDEF) and grand total. Confirm the assembled `extracted_kris.json` is the approved Golden Set for this protocol.
+**Post-Assembly passes (MANDATORY, in this order, before the Final summary):**
+1. **Step 4A-Dedup** — run the dedup pass (see "CRITICAL — De-duplication" above).
+2. **Step 4A-NDEF** — run the **NDEF Sweep** (`scripts/step4a_ndef_sweep.py`). This reviews every KRI across the 5 real domains and MOVES any whose rule is not deterministically machine-checkable into NDEF. See "CRITICAL — NDEF Sweep" below for the full spec.
+
+Both passes operate on the assembled output (`extracted_kris.json` + the `raw_{DOMAIN}.json` files) and rewrite them in place. NDEF Sweep creates `raw_NDEF.json` if it doesn't already exist.
+
+**Final summary (mandatory)**: At the end of every completed run — after both post-assembly passes — print and log a domain-by-domain KRI count: total per domain (SOA, ELIG, SAF, END, OPS, NDEF) and grand total. Confirm the assembled `extracted_kris.json` is the approved Golden Set for this protocol.
 
 **Step 4B — Golden Set Prompt**: After assembly, ask the user if a golden set is available.
 **Step 4C — Golden Set Comparison**: Category-by-category LLM comparison with protocol evidence for every difference.
@@ -744,7 +815,7 @@ This cross-check is what prevents orphan scan from re-creating KRIs that already
 
 For each candidate that survives cross-check:
 
-1. Classify into SOA / ELIG / SAF / END / OPS / NDEF using the Domain Boundary Rules (SKILL.md Rules 1–4)
+1. Classify into SOA / ELIG / SAF / END / OPS using the Domain Boundary Rules (SKILL.md Rules 1–3). NDEF is out of scope here — reclassification to NDEF happens later in the NDEF Sweep (Step 4A-NDEF).
 2. Generate a full KRI record:
    - `kri_id`: prefixed `ORPH-{DOMAIN}-{NNN}` so orphan KRIs are identifiable in downstream audits
    - `kri_name`: short name derived from the candidate text
@@ -989,7 +1060,7 @@ Each pipeline run produces these files in the output directory:
 | `raw_SAF.json` | Safety KRIs | Step 2 |
 | `raw_END.json` | Endpoint KRIs | Step 2 |
 | `raw_OPS.json` | Operations KRIs | Step 2 |
-| `raw_NDEF.json` | Non-Definable KRIs | Step 2 |
+| `raw_NDEF.json` | Non-Definable KRIs (populated by the NDEF Sweep; KRIs moved out of the 5 real domains) | **Step 4A-NDEF** |
 | `orphan_scan_report.json` | **Protocol-wide orphan scan results (primary section sweep + secondary page sweep + consolidation + cross-check + classification + user decisions + promoted orphan KRIs)** | **Step 3.5** |
 | `extracted_kris.json` | All KRIs assembled (includes promoted orphan KRIs from Step 3.5) | Step 4A |
 | `Extracted_KRIs.xlsx` | Excel workbook (6 domain sheets + Summary) | Step 4A |
