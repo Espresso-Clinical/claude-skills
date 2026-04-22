@@ -486,17 +486,42 @@ For each domain, run TWO sets of agents in parallel:
 **Set A — Claude agents (5 agents via Claude Code subagents):**
 Standard extraction using the prompts below. Each agent runs as a Claude subagent with slightly different temperature/sampling.
 
-**Set B — Gemini agents (5 agents via `scripts/gemini_extract.py`):**
-```python
-from gemini_extract import run_gemini_extraction, save_gemini_results
+**Set B — Gemini agents (5 agents via `scripts/gemini_extract.py`, multi-turn with native PDF ingestion):**
 
-results = run_gemini_extraction(
-    domain="{CATEGORY}",
-    extraction_prompt=prompt_text,  # Same prompt as Claude agents
+Gemini agents use `run_gemini_extraction_multi_turn()` — a multi-turn chat method with the PDF uploaded via Gemini's Files API. Each of the 5 parallel agents runs a sequence of focused sub-area turns defined per domain. This matches Claude agents' iteration capability (Agent tool) and was validated to reach Claude parity: ELIG 46 vs 43, SAF 37 vs 32, END 42 vs 40, OPS 75 vs 70.
+
+```python
+from gemini_extract import run_gemini_extraction_multi_turn, save_gemini_results
+
+# Uses the default SUB_AREA_TURNS template for the domain (see below).
+results = run_gemini_extraction_multi_turn(
+    domain="{CATEGORY}",              # "ELIG", "SAF", "END", or "OPS"
+    pdf_path="/path/to/protocol.pdf",
     n_agents=5,
 )
 save_gemini_results(results, out_dir, "{CATEGORY}")
 ```
+
+**Why multi-turn with PDF (vs. the original single-shot text prompt)**:
+
+On the original `run_gemini_extraction()` method, Gemini self-limits its output on large domain prompts, producing 13-16 KRIs on OPS (75KB prompt) vs. Claude's 60-82. The root cause is NOT a token budget issue (thinking and output tokens are separate in Gemini 2.5+) — it is that Gemini makes one broad pass and decides to stop, while Claude agents iterate via their tool access.
+
+The multi-turn method gives Gemini the same iteration capability: one chat session per agent, each with the PDF attached, stepping through the domain's sub-areas one turn at a time. The focused turns force exhaustive coverage within each sub-section instead of a single self-limiting pass.
+
+**Per-domain sub-area turn templates** (defined in `gemini_extract.py::SUB_AREA_TURNS`):
+
+| Domain | Turns | Coverage |
+|--------|-------|----------|
+| **ELIG** | 3 | 1) Inclusion criteria (§4.1), 2) Exclusion criteria (§4.2), 3) NDEF review (investigator-judgment criteria) |
+| **SAF** | 5 | 1) AE/SAE reporting (§8), 2) Stopping rules & IP discontinuation (§9), 3) Solicited AEs & infusion monitoring, 4) DILI thresholds (Hy's law), 5) Causality & pregnancy |
+| **END** | 5 | 1) Primary + key secondary endpoints, 2) Secondary clinical efficacy endpoints, 3) Biomarker/analyte endpoints, 4) Exploratory endpoints, 5) Governance (populations, sample size, DMC, interim analysis) |
+| **OPS** | 6 | 1) IP Handling & Administration (§7), 2) Blinding & Unblinding, 3) Randomization & Study Design, 4) Procedure Methodology (§6), 5) Documentation & Regulatory, 6) Appendices |
+
+**Scope**: This applies ONLY to Phase 2 domain extraction of ELIG / SAF / END / OPS. SOA is unchanged (6-step deterministic process). Claude agents are unchanged.
+
+**Backward compatibility**: The original `run_gemini_extraction()` (single-shot, inline text prompt, no PDF) remains available for non-Phase-2 uses — for example, Step 3B accuracy judging and Step 3.5 orphan scan, where a single-shot call is appropriate.
+
+**Custom sub-area turns**: Callers can override the default template by passing `sub_area_turns=[(name, prompt), ...]` explicitly. This is useful for protocol-specific focus (e.g., adding a turn for a unique appendix) without modifying the skill defaults.
 
 **Adjudication (after both sets complete) — consensus-based, per domain:**
 
@@ -728,6 +753,21 @@ Return ONLY a JSON array starting with [ and ending with ]
 
 **ATOMICITY**: One criterion or sub-criterion = one KRI. Multi-part criteria (e.g. 14a-14k) must produce one KRI per letter.
 
+**ATOMICITY — compound clauses (refinement)**: Split compound criteria ONLY when BOTH preconditions hold (see SKILL.md "Atomization of compound clauses" for full rules):
+1. Each sub-condition can actually FAIL for some real subject (no always-true clauses like "male or female")
+2. The list is a TRUE ENUMERATION (distinct testable conditions), NOT illustrative examples under an umbrella term
+
+Quick examples:
+- "NASH or HBsAg or HCV antibody or other liver disease" → 4 KRIs ✓ (true enumeration of distinct lab tests)
+- "HBOT or CTP within 30 days" → 2 KRIs ✓ (two distinct interventions)
+- "ALT or AST >3×ULN and/or bilirubin >1.5×ULN" → 3 KRIs ✓ (three distinct lab values)
+- "Pregnant and/or breastfeeding" → 2 KRIs ✓ (two distinct states, each testable)
+- "Males or females ≥18 to <85" → do NOT create a "sex" KRI ✗ (always TRUE — covers all humans); only age is verifiable content
+- "any medication (such as BRMs, cancer immunomodulators, systemic steroids) causing immunosuppression" → ONE KRI ✗ (illustrative examples under umbrella "any medication that causes immunosuppression"; put examples in `description`)
+- "surface area ≥1 cm² and ≤40 cm²" → ONE KRI ✗ (single data field `surface_area_cm2`, one range check)
+
+Verifiability test: (a) can sub-KRI actually fail? (b) does it read a different data field than siblings? BOTH must be YES to split. When in doubt, keep combined.
+
 ```
 Extract Eligibility KRIs from this protocol section.
 Protocol: {protocol_id}
@@ -754,6 +794,8 @@ Return ONLY a JSON array
 ### SAF prompt
 
 **ATOMICITY**: One reporting rule, one stopping rule, one emergency protocol = one KRI. Never combine AE reporting + SAE reporting into one KRI.
+
+**ATOMICITY — compound clauses (refinement)**: Apply the refined compound-clause rule (SKILL.md "Atomization of compound clauses"). Split ONLY when BOTH preconditions hold: (1) each sub-condition can actually fail, (2) it's a true enumeration not illustrative examples. Do NOT split single-field ranges or always-true clauses. Examples: "ALT or AST >3×ULN or bilirubin >2×ULN" → 3 KRIs ✓ (each a distinct lab); solicited AE list (malaise, arthralgia, fever, chills, skin rash, anorexia, nausea, vomiting) → 8 KRIs ✓ (each a distinct named AE); "report SAE within 24h AND follow up within 30 days" → 2 KRIs ✓ (two distinct timeline obligations).
 
 ```
 Extract Safety & Toxicity KRIs from this protocol section.
@@ -805,6 +847,8 @@ Return ONLY a JSON array
 ### END prompt (TWO sub-categories: Endpoints, Governance)
 
 **IMPORTANT — Atomicity**: Every endpoint, every analyte, and every governance rule gets its own separate KRI. Never combine multiple endpoints or multiple analytes into one KRI. If the protocol lists 15 secondary endpoints, produce 15 KRIs. If it lists 13 biomarker analytes, produce 13 KRIs.
+
+**ATOMICITY — compound clauses (refinement)**: Apply the refined compound-clause rule (SKILL.md "Atomization of compound clauses"). Split ONLY when BOTH preconditions hold: (1) each sub-condition can actually fail, (2) it's a true enumeration not illustrative examples. Do NOT split single-field ranges or always-true clauses. Example: "composite of CV death, MI, stroke, and UA" → 4 component KRIs + 1 composite-definition KRI (each component is a distinct testable event).
 
 **Run the END extraction in TWO passes** to ensure complete coverage:
 
@@ -903,6 +947,8 @@ Return ONLY a JSON array
 ### OPS prompt
 
 **ATOMICITY**: One operational rule = one KRI. IMP storage, IMP handling, blinding, unblinding, retention — each is a separate KRI.
+
+**ATOMICITY — compound clauses (refinement)**: Apply the refined compound-clause rule (SKILL.md "Atomization of compound clauses"). Split ONLY when BOTH preconditions hold: (1) each sub-condition can actually fail, (2) it's a true enumeration not illustrative examples under an umbrella term. Do NOT split single-field ranges or always-true clauses. Example: "IP stored at ≤-80°C and shipped on dry ice" → 2 KRIs (storage temperature and shipment condition are distinct verifiable facts).
 
 ```
 Extract Operations & Compliance KRIs from this protocol section.

@@ -219,6 +219,40 @@ Examples of correct atomicity:
 
 **This applies across all domains:** SOA (one procedure × one visit = one KRI), ELIG (one criterion or sub-criterion = one KRI), SAF (one reporting rule or one stopping rule = one KRI), END (one endpoint definition or one governance rule = one KRI), OPS (one operational rule = one KRI).
 
+### Atomization of compound clauses (refinement — apply carefully)
+
+A single protocol criterion may contain multiple sub-conditions without explicit sub-letters (a/b/c). Before splitting, two preconditions MUST both hold:
+
+**Precondition 1 — "Can this sub-condition actually fail?"** A sub-condition only becomes its own KRI if some real subject data can make it FALSE. If every subject passes by definition, it is not a verifiable check — do not extract it.
+- Example: *"Males or females ≥18 to <85 years of age"* — "Males or females" covers all humans; no data can make it FALSE. Do NOT create a sex KRI. Only the age bounds are verifiable content here.
+
+**Precondition 2 — Is this an ENUMERATION or ILLUSTRATIVE EXAMPLES?**
+- **Illustrative examples → ONE KRI.** Wording like *"any X (such as A, B, C)"*, *"X including Y"*, *"X, e.g., A, B"*. The umbrella term X is the real criterion; A/B/C are examples showing what qualifies as X. Keep as one KRI; **put the examples into the `description` field** so monitoring staff see them. Splitting would wrongly narrow monitoring to only the named examples and miss anything else that qualifies as X.
+  - Example: *"any medication (such as biological response modifiers, active immunomodulating treatment for cancer, systemic steroids) that causes immunosuppression"* → ONE KRI. `rule_for_llm` checks "any immunosuppressive medication"; `description` lists the named examples for clarity.
+- **True enumeration → SPLIT.** An explicit list where each item is a distinct independently testable condition, with no umbrella term signalling "these are examples of something broader".
+  - Example: *"positive test for HBsAg, a positive antibody test for hepatitis C, or positive test for HIV"* → 3 KRIs (each a distinct lab test on a distinct data field).
+
+**When both preconditions hold, apply splitting for:**
+
+- **True OR enumerations of distinct verifiable conditions** — each disjunct becomes its own KRI.
+  Example: *"History of documented NASH, a positive test for HBsAg, a positive antibody test for hepatitis C, or any other known or suspected underlying liver disease"* → 4 KRIs (NASH diagnosis, HBsAg test, HCV antibody test, other liver disease).
+- **AND clauses with independently verifiable parts on distinct fields** — each conjunct becomes its own KRI.
+  Example: *"adequate circulation demonstrated AND no revascularization procedure anticipated before Week 16"* → 2 KRIs (distinct data fields).
+- **Unlabeled list items that each name a distinct intervention/test/exposure** — each becomes its own KRI.
+  Example: *"Treated with hyperbaric oxygen therapy or a cellular and/or tissue product (CTP) within 30 days"* → 2 KRIs (HBOT and CTP are distinct interventions with distinct records).
+- **Combined lab thresholds with distinct analytes** — each analyte becomes its own KRI.
+  Example: *"ALT or AST >3×ULN and/or bilirubin >1.5×ULN"* → 3 KRIs (ALT, AST, bilirubin are three separate lab values).
+
+**Do NOT split when:**
+
+- **Single-field range checks** — a numeric range like *"≥1 cm² and ≤40 cm²"* is evaluated against ONE data field (`surface_area_cm2`). Write ONE KRI that checks the value is within the range. A single field cannot fail only one bound at the data level — it's a single comparison. Exception: if the range uses two distinct measurements (e.g., *"systolic ≤140 AND diastolic ≤90"*), split — two fields, two KRIs.
+- **Precondition 1 fails** — splitting would create a KRI that always passes.
+- **Precondition 2 identifies the list as illustrative examples** — keep combined, examples go in the description.
+
+**Verifiability test (final check when ambiguous):** for each proposed sub-KRI ask (a) Is there real subject data that would make this sub-KRI fail? (b) Does this sub-KRI read a different data field/record than the other sub-KRIs? Both must be YES to justify splitting. When in doubt, keep combined — over-splitting creates noise in consensus tiers that obscures real disagreement.
+
+**Important — consistency across all agents and domains:** this rule applies identically to Claude sub-agents and Gemini agents, and across SOA / ELIG / SAF / END / OPS. The goal is consistent atomic granularity regardless of which agent produced the KRI.
+
 Six categories (universal across all trials — from ICH GCP):
 - **SOA** — Schedule of Activities
 - **ELIG** — Eligibility (inclusion + exclusion)
@@ -1117,20 +1151,30 @@ The skill uses **competing models** for domain extraction to eliminate same-mode
 - Cross-model consensus (both agree) is near-certainty
 - Gemini has the lowest hallucination rate (~0.7%) and native PDF support
 
-**How to run Gemini agents:**
+**How to run Gemini agents (multi-turn with native PDF ingestion — PREFERRED for Phase 2):**
+
+Gemini agents use **multi-turn focused sub-area extraction with native PDF ingestion**. This matches Claude agents' iteration capability (via the Agent tool) and was validated to achieve Claude parity in KRI count on all 4 domains: ELIG 46 (vs Claude 43), SAF 37 (vs 32), END 42 (vs 40), OPS 75 (vs 70).
+
+Each Gemini agent opens a chat session with the PDF uploaded, then runs domain-specific sub-area turns sequentially (e.g., for OPS: IP handling → Blinding → Randomization → Procedures → Docs → Appendices). The focused turns force exhaustive extraction within each sub-area rather than a single broad pass where the model self-limits.
+
 ```python
 import sys
 sys.path.insert(0, "/path/to/scripts")
-from gemini_extract import run_gemini_extraction, save_gemini_results
+from gemini_extract import run_gemini_extraction_multi_turn, save_gemini_results
 
-# Same prompt used for Claude agents
-results = run_gemini_extraction(
-    domain="END",
-    extraction_prompt=prompt_text,
+# Uses SUB_AREA_TURNS[domain] template from gemini_extract.py by default.
+# See references/steps.md for the exact per-domain sub-area turn definitions.
+results = run_gemini_extraction_multi_turn(
+    domain="END",              # "ELIG", "SAF", "END", or "OPS"
+    pdf_path="/path/to/protocol.pdf",
     n_agents=5,
 )
 save_gemini_results(results, out_dir, "END")
 ```
+
+**Scope**: The multi-turn method is used ONLY for Phase 2 domain extraction of ELIG, SAF, END, OPS. SOA is unchanged (uses the 6-step deterministic process, not multi-agent extraction). Claude sub-agents are unchanged (they already iterate via the Agent tool).
+
+**Backward compatibility**: The original `run_gemini_extraction()` (single-shot, text prompt, no PDF) is kept for other uses — e.g., Step 3B accuracy judging, Step 3.5 orphan scan — where single-shot is appropriate.
 
 **Adjudication — consensus-based, per domain:**
 
