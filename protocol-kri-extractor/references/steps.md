@@ -512,7 +512,7 @@ The multi-turn method gives Gemini the same iteration capability: one chat sessi
 
 | Domain | Turns | Coverage |
 |--------|-------|----------|
-| **ELIG** | 3 | 1) Inclusion criteria (§4.1), 2) Exclusion criteria (§4.2), 3) NDEF review (investigator-judgment criteria) |
+| **ELIG** | 2 | 1) Inclusion criteria (§4.1), 2) Exclusion criteria (§4.2) |
 | **SAF** | 5 | 1) AE/SAE reporting (§8), 2) Stopping rules & IP discontinuation (§9), 3) Solicited AEs & infusion monitoring, 4) DILI thresholds (Hy's law), 5) Causality & pregnancy |
 | **END** | 5 | 1) Primary + key secondary endpoints, 2) Secondary clinical efficacy endpoints, 3) Biomarker/analyte endpoints, 4) Exploratory endpoints, 5) Governance (populations, sample size, DMC, interim analysis) |
 | **OPS** | 6 | 1) IP Handling & Administration (§7), 2) Blinding & Unblinding, 3) Randomization & Study Design, 4) Procedure Methodology (§6), 5) Documentation & Regulatory, 6) Appendices |
