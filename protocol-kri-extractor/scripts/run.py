@@ -35,9 +35,11 @@ Step order (from SKILL.md Phase 1 → Phase 4):
   3b         Full KRI accuracy judging (100%, 5-judge panel) [BLOCKING]
   3c         Consistency check
   3d         Full verbatim pdfplumber verification            [BLOCKING]
+  2.6        Auto-judgment for T2 + T3-promoted KRIs (6-judge neutral panel)
   4a         Assembly + Excel
   4a-dedup   Cross-domain + intra-domain de-duplication
   4a-ndef    Post-extraction NDEF sweep (moves non-definable KRIs into NDEF)
+  4a-flagged End-of-run cross-domain flagged-review table (user review)
   4b         Golden set comparison (optional)
 """
 
@@ -82,6 +84,7 @@ STEP_CATALOG = [
     ("1b",          "SoA ontology build",                                         False),
     ("1c",          "Deterministic footnote mapper (Step 1C)",                    False),
     ("2",           "KRI extraction (per-domain, multi-model panel)",             False),
+    ("2.6",         "Auto-judgment for T2 + T3-promoted KRIs (6-judge panel)",    False),
     ("3.5",         "Protocol-wide orphan scan (3 Claude + 3 Gemini)",            True),
     ("3a",          "Completeness + clinical heuristics H1–H10",                  False),
     ("3b",          "Full KRI accuracy judging (100%, 5-judge panel)",            True),
@@ -90,6 +93,7 @@ STEP_CATALOG = [
     ("4a",          "Assembly (extracted_kris.json + Excel)",                     False),
     ("4a-dedup",    "Cross-domain + intra-domain dedup",                          False),
     ("4a-ndef",     "Post-extraction NDEF sweep (6-judge panel)",                 False),
+    ("4a-flagged",  "End-of-run flagged-review table (cross-domain consolidate)", False),
     ("4b",          "Golden set comparison (optional)",                           False),
 ]
 
@@ -338,6 +342,44 @@ def run_step_4a_dedup(pdf, out_dir, **kw):
     return True
 
 
+def run_step_2_6(pdf, out_dir, **kw):
+    """Step 2.6 — Auto-judgment for every T2 + T3-promoted KRI, per domain.
+
+    Runs the 4-layer engine (verification, atomicity, coverage, 6-judge panel,
+    aggregate) on raw_{DOMAIN}.json. Writes {domain}_autojudgment_report.json,
+    {domain}_manual_review_decisions.json, {domain}_tier3_filtered.json.
+
+    With --auto-approve-unanimous (default ON), pipeline does NOT block on
+    flagged list — items defaulted to rejected and surfaced at end-of-run
+    in Step 4A-FlaggedReview.
+    """
+    from step2_6_autojudgment import run_autojudgment_for_domain
+    print(f"\n[ Step 2.6 — {STEP_DESC['2.6']} ]")
+    auto = bool(kw.get("auto_approve_unanimous", True))
+    domains = kw.get("categories") or ["SOA", "ELIG", "SAF", "END", "OPS"]
+    if isinstance(domains, str):
+        domains = [d.strip() for d in domains.split(",")]
+    ok_all = True
+    for domain in domains:
+        raw_path = os.path.join(out_dir, f"raw_{domain}.json")
+        if not os.path.isfile(raw_path):
+            print(f"  (skip {domain} — raw_{domain}.json not present)")
+            continue
+        ok = run_autojudgment_for_domain(
+            out_dir=out_dir, domain=domain, pdf_path=pdf,
+            auto_approve_unanimous=auto,
+        )
+        ok_all = ok_all and ok
+    return ok_all
+
+
+def run_step_4a_flagged(pdf, out_dir, **kw):
+    """Step 4A-FlaggedReview — end-of-run cross-domain consolidated table."""
+    from step4a_flagged_review import run as run_flagged
+    print(f"\n[ Step 4A-FlaggedReview — {STEP_DESC['4a-flagged']} ]")
+    return run_flagged(out_dir)
+
+
 def run_step_4a_ndef(pdf, out_dir, **kw):
     from step4a_ndef_sweep import run_sweep
     print(f"\n[ Step 4A-NDEF — {STEP_DESC['4a-ndef']} ]")
@@ -371,14 +413,16 @@ STEP_RUNNERS = {
     "3d":          run_step_3d,
     "4a":          run_step_4a,
     "4a-dedup":    run_step_4a_dedup,
+    "2.6":         run_step_2_6,
     "4a-ndef":     run_step_4a_ndef,
+    "4a-flagged":  run_step_4a_flagged,
     "4b":          run_step_4b,
 }
 
 
 # ─── Pipeline driver ───────────────────────────────────────────────────────
 def run_pipeline(pdf, out_dir, golden=None, from_step=None, only_steps=None,
-                 protocol_id=None, categories=None):
+                 protocol_id=None, categories=None, auto_approve_unanimous=True):
     os.makedirs(out_dir, exist_ok=True)
 
     print(f"\n{'=' * 60}")
@@ -405,7 +449,8 @@ def run_pipeline(pdf, out_dir, golden=None, from_step=None, only_steps=None,
         steps_to_run = list(STEP_ORDER)
 
     t_start = time.time()
-    kw = {"golden": golden, "protocol_id": protocol_id, "categories": categories}
+    kw = {"golden": golden, "protocol_id": protocol_id, "categories": categories,
+          "auto_approve_unanimous": auto_approve_unanimous}
 
     try:
         for step_id in steps_to_run:
@@ -450,6 +495,18 @@ def main():
     parser.add_argument("--only", dest="only_steps",
                         help="Run only these steps (comma-separated)")
     parser.add_argument("--categories", help="For Step 2: comma-separated domains")
+    parser.add_argument("--auto-approve-unanimous", dest="auto_approve_unanimous",
+                        action="store_true", default=True,
+                        help="Step 2.6: auto-approve/reject on panel unanimous vote; "
+                             "flagged items default to rejected (surfaced at end-of-run "
+                             "in flagged_review_decisions.json for user re-inclusion). "
+                             "Default: ON (enables overnight runs). Scope: Step 2.6 only — "
+                             "Step 3.5 orphan scan and Step 3B accuracy retain their own "
+                             "independent user-decision gates.")
+    parser.add_argument("--interactive", dest="auto_approve_unanimous",
+                        action="store_false",
+                        help="Step 2.6: disable auto-approve; block per-domain on "
+                             "flagged list until user resolves every row")
     # Legacy mode
     parser.add_argument("protocol", nargs="?", help="Legacy registry protocol ID (or 'all')")
     parser.add_argument("--compare", action="store_true",
@@ -467,6 +524,7 @@ def main():
             from_step=args.from_step,
             only_steps=only_steps,
             categories=args.categories,
+            auto_approve_unanimous=args.auto_approve_unanimous,
         )
         sys.exit(0 if ok else 1)
 
@@ -489,6 +547,7 @@ def main():
                 only_steps=only_steps,
                 protocol_id=pid,
                 categories=args.categories,
+                auto_approve_unanimous=args.auto_approve_unanimous,
             )
             all_ok = all_ok and ok
         sys.exit(0 if all_ok else 1)
