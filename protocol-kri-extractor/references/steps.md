@@ -516,6 +516,7 @@ The multi-turn method gives Gemini the same iteration capability: one chat sessi
 | **SAF** | 5 | 1) AE/SAE reporting (§8), 2) Stopping rules & IP discontinuation (§9), 3) Solicited AEs & infusion monitoring, 4) DILI thresholds (Hy's law), 5) Causality & pregnancy |
 | **END** | 5 | 1) Primary + key secondary endpoints, 2) Secondary clinical efficacy endpoints, 3) Biomarker/analyte endpoints, 4) Exploratory endpoints, 5) Governance (populations, sample size, DMC, interim analysis) |
 | **OPS** | 6 | 1) IP Handling & Administration (§7), 2) Blinding & Unblinding, 3) Randomization & Study Design, 4) Procedure Methodology (§6), 5) Documentation & Regulatory, 6) Appendices |
+| **SOA** (text-only) | 6 | 1) Drug administration timing & separations (§5/§7), 2) Study-wide duration & schedule meta-rules (§3/§4), 3) Cross-visit procedure methodology (§6), 4) Long-term follow-up obligations (§9/§10), 5) Global visit windows & tolerances, 6) Sample & volume caps. Additive layer — Phase 1 Camelot + footnote mapping still produces the SoA-table cell-level KRIs. SOA-text prompts include guardrails forbidding re-extraction of table cells or footnote cell-rules. Output merges into `raw_SOA.json`; Step 4A-Dedup resolves overlap. |
 
 **Scope**: This applies ONLY to Phase 2 domain extraction of ELIG / SAF / END / OPS. SOA is unchanged (6-step deterministic process). Claude agents are unchanged.
 
