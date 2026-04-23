@@ -1021,7 +1021,66 @@ Return JSON array of duplicates to delete:
 
 **Save**: `{out_dir}/crossdomain_dedup_report.json`
 
-Apply all deletions, then re-save `extracted_kris.json` and re-run Step 4A Excel generation.
+Apply all deletions, then re-save `extracted_kris.json`. Do NOT regenerate the Excel yet — the NDEF Sweep (Step 4A-NDEF) runs next and may move KRIs between domains. The final Excel is generated after the sweep completes.
+
+---
+
+## Step 4A-NDEF — Post-Extraction NDEF Sweep (MANDATORY, runs AFTER Step 4A-Dedup)
+
+**Purpose**: Review every KRI in the assembled set and move any whose rule is not machine-checkable into the NDEF category. NDEF is populated exclusively here — extractors do not produce NDEF entries (see SKILL.md Rule 4).
+
+**Script**: `scripts/step4a_ndef_sweep.py`
+
+**Runs after**: Step 4A assembly and Step 4A-Dedup.
+**Runs before**: the final Excel regeneration and the run's Final summary.
+
+**Input**:
+- `{out_dir}/extracted_kris.json` (post-dedup state)
+- All `{out_dir}/raw_{DOMAIN}.json` for DOMAIN in SOA/ELIG/SAF/END/OPS (post-dedup)
+
+**Process** — for each KRI in the assembled set:
+
+1. A 6-agent judge panel (3 Claude + 3 Gemini) independently votes `DEFINABLE` or `NON_DEFINABLE`, each with a one-sentence reason drawn from the KRI's `rule_for_llm` text.
+2. Votes are aggregated; consensus tier determines action:
+
+| Vote count | Tier | Action |
+|---|---|---|
+| 5–6 agents → NON_DEFINABLE | T1 | Auto-move to NDEF, no user review. |
+| 3–4 agents → NON_DEFINABLE | T2 | Present decision table to user; user approves/rejects per-KRI. |
+| 0–2 agents → NON_DEFINABLE | — | Keep in source domain. |
+
+3. For each KRI approved for reclassification:
+   - Change `category_id` → `"NDEF"` and `category_label` → `"Non-Definable"`.
+   - Assign a new `kri_id` in the `NDEF-###` sequence (global across the final NDEF set).
+   - Set `original_kri_id` = previous id (audit trail).
+   - Set `original_domain` = source domain.
+   - Rewrite `rule_for_llm` → `"NDEF — Non-verifiable: [panel consensus reason]"`.
+   - Leave `protocol_reference`, `supporting_quote`, `combined_ref`, `description`, `additional_footnotes` unchanged.
+
+**Qualifying criteria** (binding — matches SKILL.md Rule 4):
+- Investigator judgment wording ("in the opinion of", "if clinically significant", etc.)
+- Undefined time windows ("as soon as possible", "in a timely manner", "promptly")
+- Undefined effort/quantity ("reasonable effort", "adequate", "sufficient")
+- Subjective thresholds
+- Any other wording that cannot produce a deterministic YES/NO on subject data
+
+**Output**:
+- `{out_dir}/raw_NDEF.json` — all newly-classified NDEF entries.
+- `{out_dir}/ndef_sweep_report.json` — per-KRI vote breakdown, reasons, user decisions (audit trail).
+- Updated `{out_dir}/raw_{SOURCE}.json` files — source domain files rewritten with moved KRIs removed.
+- Updated `{out_dir}/extracted_kris.json` — reflects final classification.
+
+**After the sweep completes**: re-run Step 4A Excel generation to produce the final `Extracted_KRIs.xlsx`. The Final summary (domain-by-domain KRI count) is printed only after the Excel regeneration.
+
+**Constraints**:
+- MOVE only. The sweep does not delete, merge, or split KRIs.
+- Runs once per extraction. Idempotent — a second run with unchanged inputs and unchanged user decisions produces the same output.
+- Does not reclassify BETWEEN the 5 real domains — only between each real domain and NDEF.
+
+**User decision table format** (for T2 KRIs):
+
+| KRI ID | Source domain | KRI Name | rule_for_llm | Vote (NON_DEF / total) | Top reason cited by panel | Decision (move to NDEF / keep in source) |
+|---|---|---|---|---|---|---|
 
 ---
 

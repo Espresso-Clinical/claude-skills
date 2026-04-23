@@ -37,6 +37,7 @@ Step order (from SKILL.md Phase 1 → Phase 4):
   3d         Full verbatim pdfplumber verification            [BLOCKING]
   4a         Assembly + Excel
   4a-dedup   Cross-domain + intra-domain de-duplication
+  4a-ndef    Post-extraction NDEF sweep (moves non-definable KRIs into NDEF)
   4b         Golden set comparison (optional)
 """
 
@@ -88,6 +89,7 @@ STEP_CATALOG = [
     ("3d",          "Full verbatim pdfplumber verification",                      True),
     ("4a",          "Assembly (extracted_kris.json + Excel)",                     False),
     ("4a-dedup",    "Cross-domain + intra-domain dedup",                          False),
+    ("4a-ndef",     "Post-extraction NDEF sweep (6-judge panel)",                 False),
     ("4b",          "Golden set comparison (optional)",                           False),
 ]
 
@@ -336,6 +338,14 @@ def run_step_4a_dedup(pdf, out_dir, **kw):
     return True
 
 
+def run_step_4a_ndef(pdf, out_dir, **kw):
+    from step4a_ndef_sweep import run_sweep
+    print(f"\n[ Step 4A-NDEF — {STEP_DESC['4a-ndef']} ]")
+    auto = bool(kw.get("auto_approve_t2", False))
+    rc = run_sweep(out_dir, auto_approve_t2=auto)
+    return rc == 0
+
+
 def run_step_4b(pdf, out_dir, **kw):
     golden = kw.get("golden")
     if not golden or not os.path.exists(golden):
@@ -361,6 +371,7 @@ STEP_RUNNERS = {
     "3d":          run_step_3d,
     "4a":          run_step_4a,
     "4a-dedup":    run_step_4a_dedup,
+    "4a-ndef":     run_step_4a_ndef,
     "4b":          run_step_4b,
 }
 
