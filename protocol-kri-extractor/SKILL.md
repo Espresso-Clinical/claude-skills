@@ -123,11 +123,11 @@ For Step 2, the monitor MUST verify:
 - Exactly 5 Gemini agents were launched per domain (via `gemini_extract.py`)
 - All 10 agent outputs were collected and merged
 - Consensus tiers were correctly applied:
-  - 7-10 agents → auto-approved (verify these went into the domain's KRI set)
-  - 4-6 agents → decision table was presented to the user AND the user responded before proceeding
-  - 1-3 agents → Tier 3 promotion pipeline: coverage filter → verification agent → presented in the per-domain decision table as [T3-PROMOTED] rows → user accepted/rejected; NOT auto-deleted. Verify `{domain}_tier3_filtered.json` exists.
+  - 7-10 agents (T1) → auto-approved (verify these went into the domain's KRI set)
+  - 4-6 agents (T2) → Step 2.6 auto-judgment (6-judge neutral panel) produced a per-KRI pre-decision. `{domain}_autojudgment_report.json` and `{domain}_manual_review_decisions.json` exist with full layer-by-layer results. In `--auto-approve-unanimous` mode (default ON), flagged items default to rejected and surface at end-of-run in `flagged_review_decisions.json` (Step 4A-FlaggedReview). In `--interactive` mode, every flagged row has an explicit user decision.
+  - 1-3 agents (T3) → Tier 3 promotion pipeline (T3-1 Coverage / T3-2 Verbatim / T3-2.5 Atomicity / T3-3 Panel / T3-4 Aggregate) handled by Step 2.6. NOT auto-deleted. Verify `{domain}_tier3_filtered.json` exists with per-KRI dispositions.
 - The domain processing order was sequential: SOA → ELIG → SAF → END → OPS
-- Each domain completed fully (including user approval of Tier 2) before the next domain began
+- Each domain completed fully (Step 2.6 produced its decision table, flagged items either resolved in `--interactive` mode OR defaulted to rejected in auto-approve mode) before the next domain began
 
 **4. Blocking Gate Enforcement**
 The monitor enforces all blocking gates:
@@ -599,7 +599,7 @@ The SOA extraction follows a strict 6-step process:
 5. **Footnote enrichment**: After the table-based KRIs are complete, read all footnotes from the protocol and enrich each KRI with relevant footnote details. Also create **cross-visit rule KRIs** for protocol-wide rules (fasting requirements, dosing windows, 10-day lipid rule, IP administration sequence, missed visit escalation, EDC retention, safety follow-up periods, etc.).
 6. **Self-verification**: Cross-check that every X cell in the Camelot CSV has a corresponding KRI. Report: `N/N cells covered = 100%`.
 
-For the 5 text-extracted domains (ELIG, SAF, END, OPS, and **SOA-text**), extraction uses a **10-agent multi-model panel** (5 Claude Sonnet + 5 Gemini 2.5 Pro agents running in parallel). Consensus determines tier: **Tier 1** = 7–10 agents agree (auto-approved), **Tier 2** = 4–6 agents agree (decision table shown to user, pipeline pauses for approval), **Tier 3** = 1–3 agents (enters Tier 3 promotion pipeline). Per-domain content rules:
+For the 5 text-extracted domains (ELIG, SAF, END, OPS, and **SOA-text**), extraction uses a **10-agent multi-model panel** (5 Claude Sonnet + 5 Gemini 2.5 Pro agents running in parallel). Consensus determines tier: **Tier 1** = 7–10 agents agree (auto-approved into Golden Set), **Tier 2** = 4–6 agents agree (**Step 2.6 auto-judgment** produces the per-KRI pre-decision), **Tier 3** = 1–3 agents (enters Tier 3 promotion pipeline, terminating in Step 2.6 auto-judgment). Step 2.6 replaces the prior manual decision-table pause with an automated 4-layer engine (verification gate, atomicity check, dedup/coverage, 6-judge neutral panel, aggregate). With `--auto-approve-unanimous` ON (default), the pipeline runs end-to-end without blocking; flagged items default to rejected and surface at end-of-run in **Step 4A-FlaggedReview** for cross-domain user review and optional re-inclusion. Per-domain content rules:
 - ELIG: one KRI per criterion/sub-criterion. Extract every criterion into ELIG regardless of whether it is objectively verifiable — judgment-based or vaguely-worded criteria are reclassified to NDEF later by the NDEF Sweep (Step 4A-NDEF), not by the extractor.
 - SAF: every reporting timeline, stopping rule, emergency protocol
 - END: **two sub-categories** — (1) one KRI per endpoint definition (primary, each key secondary, each other secondary individually, each biomarker analyte × measurement type, each HCRU metric), (2) one KRI per governance rule (analysis populations, interim analysis triggers, alpha spending, study end definition, data locks)
@@ -1293,49 +1293,101 @@ save_gemini_results(results, out_dir, "END")
 
 Decision table shown to user for 4–6 tier KRIs includes: KRI ID, KRI Name, agent count with breakdown (e.g., "5/10 (3C + 2G)"), verified status, reference & quote, and a decision column.
 
-**Process is sequential per domain**: SOA → ELIG → SAF → END → OPS. Each domain completes its 10-agent extraction → merge → consensus tiers → Tier 3 promotion pipeline → user decision table → de-duplication BEFORE the next domain begins.
+**Process is sequential per domain**: SOA → ELIG → SAF → END → OPS. Each domain completes its 10-agent extraction → merge → consensus tiers → Step 2.5 Section Obligation Inventory → Step 2.6 auto-judgment (handles T2 + T3-promoted, produces the decision table) → de-duplication BEFORE the next domain begins. In `--auto-approve-unanimous` mode (default), Step 2.6 completes without blocking; flagged items default to rejected and surface at end-of-run in Step 4A-FlaggedReview.
 
 ---
 
-### Tier 3 Promotion Pipeline (ADDITIVE — replaces silent auto-delete)
+### Tier 3 Promotion Pipeline (ADDITIVE — replaces silent auto-delete, extended 3→5 steps)
 
-KRIs found by only 1–3 agents (Tier 3) are NOT silently discarded. They enter a 3-step promotion pipeline before the per-domain decision table:
+KRIs found by only 1–3 agents (Tier 3) are NOT silently discarded. They enter a 5-step promotion pipeline that terminates in Step 2.6 auto-judgment (same 6-judge panel that handles T2). The rule "every discarded KRI must have a non-empty `reason`" (Rule 17) applies to every step.
 
-**Step T3-1 — Coverage Filter**: Check whether the Tier 3 KRI's rule is already covered verbatim by an approved Tier 1 or Tier 2 KRI (same section + same obligation). If fully covered → discard with reason "Covered by [KRI_ID]". If not fully covered → advance to T3-2.
+**Step T3-1 — Coverage Filter** (deterministic): Check whether the Tier 3 KRI's rule is already covered verbatim by an approved Tier 1 KRI (same section + same obligation). If fully covered → discard with reason "Covered by [KRI_ID]". If not → advance to T3-2. Implemented as Step 2.6 Layer 2.
 
-**Step T3-2 — Verification Agent**: A dedicated verification agent reads the cited protocol section and answers: (a) Does the protocol text contain a real, verifiable obligation here? (b) Is it atomically separable from existing KRIs? (c) Provide a verbatim `supporting_quote`. If the answer to (a) or (b) is No → discard with explicit documented reason. If both are Yes → advance to T3-3.
+**Step T3-2 — Verbatim Verification** (deterministic): Verify the `supporting_quote` is a verbatim substring of the cited page (Step 3D-style pdfplumber check), the `rule_for_llm` is binary/machine-readable, and the `protocol_reference` resolves to a real page. Any fail → discard with explicit documented reason. Implemented as Step 2.6 Layer 1.
 
-**Step T3-3 — Promote to Decision Table**: The KRI is added to the per-domain manual review decision table (see below) as a `[T3-PROMOTED]` row, alongside the Tier 2 KRIs. The user reviews and accepts or rejects it like any other KRI.
+**Step T3-2.5 — Atomicity Check (NEW)** (deterministic): Apply the atomization-of-compound-clauses refinement from SKILL.md (preconditions "can it actually fail?" and "enumeration vs illustrative examples"). Rejects always-true clauses (e.g., "Males or females"), illustrative-example splits, and pure definitions without a verifiable action. Advances candidate if atomic. Implemented as Step 2.6 Layer 1.5.
 
-**Artifact**: Save all Tier 3 KRIs and their disposition (promoted / discarded + reason) to `{domain}_tier3_filtered.json`.
+**Step T3-3 — 6-Judge Panel** (LLM): Dispatch to the same 6-judge neutral panel (3 Claude + 3 Gemini) used for T2 candidates. Each judge votes accept / reject / conditional with a ≤25-word reason. Implemented as Step 2.6 Layer 3.
 
-**CRITICAL**: A Tier 3 KRI MUST NEVER be discarded with an empty `reason` field. The reason must name the covering KRI ID (if covered) or clearly explain why the cited text does not constitute a valid, atomically verifiable obligation.
+**Step T3-4 — Aggregate Decision**: Apply Step 2.6 Layer 4 aggregate logic. ≥5 accept (≤1 reject) → auto-approve into Golden Set. ≥5 reject (≤1 accept) → auto-reject. Anything else → flag (see flagged-items handling in the "Step 2.6 Auto-Judgment" section below).
+
+**Artifact**: Save all Tier 3 KRIs and their disposition (promoted / rejected / flagged + reason + stage) to `{domain}_tier3_filtered.json`.
+
+**CRITICAL**: A Tier 3 KRI MUST NEVER be discarded with an empty `reason` field. The reason must name the covering KRI ID (if covered at T3-1) or the specific layer that rejected it with a concrete cause.
 
 ---
 
-### Per-Domain Manual Review Checkpoint (MANDATORY BLOCKING GATE)
+### Step 2.6 — Auto-Judgment for T2 + T3-Promoted KRIs (MANDATORY, replaces manual decision table)
 
-After each domain's Tier 3 promotion pipeline completes, the pipeline **PAUSES** and presents the user with a consolidated decision table for ALL KRIs that require human review:
+Runs per-domain, AFTER Step 2.5 Section Obligation Inventory and BEFORE Phase 3. Converts the prior manual Phase-2 decision-table gate into an automated pre-decision step so the pipeline can run end-to-end overnight without blocking on per-domain user review.
 
-- All **Tier 2** KRIs (4–6 agents)
-- All **T3-PROMOTED** KRIs from the Tier 3 pipeline
+**Distinction from other judging steps (critical — avoids confusion):**
+- Step 2.6 decides **INCLUSION in the Golden Set** — runs per-domain during Phase 2 on T2 + T3-promoted candidates only.
+- **Step 3B** decides **CORRECTNESS** of every KRI — runs after Phase 2 completion, 100% coverage, 5-judge panel (3 Claude + 2 Gemini). Different panel, different purpose. **Step 2.6 does NOT replace Step 3B.**
+- **Step 3.5** orphan scan discovers **MISSED rules** — 6-agent panel, Phase 3. Different purpose.
+- **Step 4A-NDEF** sweep reclassifies **non-definable KRIs** into NDEF — 6-judge panel, post-assembly. Different purpose.
 
-The pipeline MUST NOT proceed to de-duplication for that domain until the user has made an explicit Accept / Reject / Edit decision for every row. The Compliance Monitor enforces this gate.
+**4-layer engine per candidate** (implemented in `scripts/step2_6_autojudgment.py`):
 
-**Decision table columns:**
+| Layer | What it checks | Type | Failure → |
+|---|---|---|---|
+| Layer 1 — Verification gate | Verbatim `supporting_quote` substring + binary `rule_for_llm` + reference sanity | Deterministic | auto-reject |
+| Layer 1.5 — Atomicity | Always-true / illustrative-examples / pure-definition violations (atomization refinement) | Deterministic | auto-reject |
+| Layer 2 — Coverage/dedup | Already covered by an approved T1 KRI? | Deterministic | auto-reject |
+| Layer 3 — 6-judge neutral panel | 3 Claude + 3 Gemini independently vote accept / reject / conditional on this KRI | LLM | Layer 4 aggregates |
+| Layer 4 — Aggregate | ≥5 accept + ≤1 reject → auto_approve. ≥5 reject + ≤1 accept → auto_reject. Anything else → flag. | Deterministic | flag goes to decision table |
+
+**Judge prompt**: all 6 judges share the same CRA-framed prompt (consistent with the 10-agent extraction panel). No personas. See `scripts/autojudgment_prompts.py`.
+
+**Gate behavior — `--auto-approve-unanimous` (default ON)**:
+- Pipeline runs to completion without blocking per-domain on flagged items.
+- Flagged items default to REJECTED at Phase 4 (conservative Golden Set).
+- Flagged items are preserved verbatim in each domain's `{domain}_manual_review_decisions.json.sections.flagged_for_review` AND surfaced together in the end-of-run consolidated **Step 4A-FlaggedReview** table (`flagged_review_decisions.json`) so the user reviews all 5 domains' flagged items in one pass.
+- The user can re-include any flagged KRI by setting `user_override: "include"` in `flagged_review_decisions.json` and re-running `python run.py --from 4a` to regenerate the Golden Set.
+
+**Gate behavior — `--interactive`**:
+- Pipeline pauses per-domain on flagged items. User must Accept / Reject / Edit every flagged row before advancing to the next domain. Matches the prior "Per-Domain Manual Review Checkpoint" blocking behavior.
+
+**Relationship to the prior MANDATORY BLOCKING GATE**: in `--interactive` mode the gate behaves exactly as before (blocks at Phase 2 for that domain until user decides every row). In `--auto-approve-unanimous` mode the gate **shifts forward to Phase 4** — it still blocks the Golden Set from assembly if `flagged_review_decisions.json` indicates the user has pending overrides to apply. The gate is never silently removed; its enforcement point is mode-dependent.
+
+**Scope of `--auto-approve-unanimous`**: affects Step 2.6 ONLY. Step 3.5 orphan scan USER_DECISION items and Step 3B accuracy FLAG items retain their own independent pause behavior — neither is affected by this flag.
+
+**Decision-table columns** (unchanged display format, now produced by Step 2.6):
+
 | Column | Content |
 |---|---|
 | KRI ID | Proposed ID (e.g., `SAF-AE-007`) |
-| Tier | `T2` or `T3-PROMOTED` |
+| Tier | `T1` / `T2` / `T3` |
 | KRI Name | Short descriptive name |
-| Description | 1-2 sentence description of what this KRI monitors and why it matters |
-| Agents | Count + breakdown (e.g., `5/10 (3C+2G)`) |
+| Description | 1–2 sentence description |
+| Agents | Count (e.g., `5/10`) |
 | Protocol Ref | Section + page |
-| Supporting Quote | Verbatim excerpt (first 80 chars shown, expandable) |
-| View | "View in Protocol" button (see Interactive Review Table below) |
-| Decision | `Accept` / `Reject` / `Edit` |
+| Supporting Quote | Verbatim excerpt |
+| Auto-decision | `auto_approve` / `auto_reject` / `flag` |
+| Reason | One-sentence synthesis from the layer that produced the decision |
+| Panel summary | `{accept}A/{reject}R/{conditional}C/{error}E` (e.g., `5A/1R/0C/0E`) |
+| Decision source | `auto` or `user_override` |
+| User override | `include` / `exclude` / null |
 
-**Artifact**: Save all user decisions (including timestamps and any edited fields) to `{domain}_manual_review_decisions.json`. This file is the auditable record of every human decision in the extraction run.
+**Artifact**: `{domain}_autojudgment_report.json` (full layer-by-layer audit) + `{domain}_manual_review_decisions.json` (sectioned decision table). Both written per domain.
+
+**Rule 17 compliance**: every auto-rejected KRI has a non-empty `reason` identifying the specific layer that rejected it.
+
+---
+
+### Step 4A-FlaggedReview — End-of-Run Cross-Domain Flagged Review (runs after Step 4A-NDEF)
+
+Collects every flagged KRI from all 5 domains' Step 2.6 autojudgment outputs and produces a single consolidated table (`flagged_review_decisions.json`) with FULL KRI columns so the user can scan all flagged items in one pass, not per-domain.
+
+- **Input**: all `{domain}_manual_review_decisions.json.sections.flagged_for_review` rows.
+- **Default action at Phase 4**: flagged items are **rejected** (not included in the Golden Set). They are preserved in the artifact for review.
+- **User re-inclusion workflow**:
+  1. Review `flagged_review_decisions.json`.
+  2. Set `user_override: "include"` on any row you want back in the Golden Set.
+  3. Run `python scripts/step4a_flagged_review.py --out /path/ --apply-overrides` (this re-adds included KRIs to their source domain's `raw_{DOMAIN}.json`).
+  4. Re-run `python run.py --pdf ... --out ... --from 4a` to regenerate the Golden Set.
+
+This decouples overnight pipeline completion from user review. The user reviews once at the end across all domains, not five times during the run.
 
 ---
 
