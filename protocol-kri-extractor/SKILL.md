@@ -599,11 +599,45 @@ The SOA extraction follows a strict 6-step process:
 5. **Footnote enrichment**: After the table-based KRIs are complete, read all footnotes from the protocol and enrich each KRI with relevant footnote details. Also create **cross-visit rule KRIs** for protocol-wide rules (fasting requirements, dosing windows, 10-day lipid rule, IP administration sequence, missed visit escalation, EDC retention, safety follow-up periods, etc.).
 6. **Self-verification**: Cross-check that every X cell in the Camelot CSV has a corresponding KRI. Report: `N/N cells covered = 100%`.
 
-For non-SOA categories (ELIG, SAF, END, OPS), extraction uses a **10-agent multi-model panel** (5 Claude Sonnet + 5 Gemini 2.5 Pro agents running in parallel). Consensus determines tier: **Tier 1** = 7–10 agents agree (auto-approved), **Tier 2** = 4–6 agents agree (decision table shown to user, pipeline pauses for approval), **Tier 3** = 1–3 agents (enters Tier 3 promotion pipeline). Per-domain content rules:
+For the 5 text-extracted domains (ELIG, SAF, END, OPS, and **SOA-text**), extraction uses a **10-agent multi-model panel** (5 Claude Sonnet + 5 Gemini 2.5 Pro agents running in parallel). Consensus determines tier: **Tier 1** = 7–10 agents agree (auto-approved), **Tier 2** = 4–6 agents agree (decision table shown to user, pipeline pauses for approval), **Tier 3** = 1–3 agents (enters Tier 3 promotion pipeline). Per-domain content rules:
 - ELIG: one KRI per criterion/sub-criterion. Extract every criterion into ELIG regardless of whether it is objectively verifiable — judgment-based or vaguely-worded criteria are reclassified to NDEF later by the NDEF Sweep (Step 4A-NDEF), not by the extractor.
 - SAF: every reporting timeline, stopping rule, emergency protocol
 - END: **two sub-categories** — (1) one KRI per endpoint definition (primary, each key secondary, each other secondary individually, each biomarker analyte × measurement type, each HCRU metric), (2) one KRI per governance rule (analysis populations, interim analysis triggers, alpha spending, study end definition, data locks)
 - OPS: IMP handling, blinding, records, compliance
+- **SOA-text** (additive layer): protocol-wide / cross-visit / narrative-only SOA rules that are NOT in the SoA table — drug-timing separations, study-wide duration caps, cross-visit procedure methodology, long-term follow-up obligations, global visit windows, sample/volume caps. Output merges into `raw_SOA.json` alongside Phase 1 output. Guardrails in every SOA-text agent prompt forbid re-extracting table cells or footnote cell-rules (those come from Phase 1). See "SOA-text Phase 2 extraction" subsection below for the full spec.
+
+### SOA-text Phase 2 extraction (additive — does NOT replace Phase 1 SOA)
+
+Phase 1 extracts SOA from the **SoA table** using a deterministic Camelot + footnote-mapping process, plus step-5 cross-visit rules derived from footnotes. That process remains the authoritative source for:
+- Every "procedure × visit" cell-level KRI (one X in the table = one KRI).
+- Every footnote-anchored rule that attaches to specific cells.
+- The cross-visit rule KRIs produced by Phase 1 step 5 from footnotes and known protocol-wide rules.
+
+Empirically, Phase 1 step 5 misses some protocol-wide SOA rules that live in the protocol narrative rather than the SoA table or its footnotes — e.g., drug-timing separations ("administer phage ≥2 h before antibiotic"), total study-duration caps ("≤56 weeks"), "all visits must occur regardless of healing status", long-term follow-up obligations at W26/W52, global visit-window tolerances, cumulative blood-volume caps. The SOA-text Phase 2 layer exists to catch these.
+
+**Scope rules (apply to every SOA-text agent prompt — MANDATORY)**:
+1. Do **NOT** extract "procedure X at visit Y" KRIs — those come from the Camelot table in Phase 1.
+2. Do **NOT** extract footnote rules that attach to specific table cells — the deterministic footnote mapper already covers those.
+3. Only emit KRIs that are protocol-wide, cross-visit, or narrative-only. If a rule appears in the SoA table or its footnotes, skip it.
+4. Respect Rule 1 (SOA ownership) — "procedure happened at visit" KRIs already belong to Phase 1 SOA; do not duplicate them here.
+5. Use prefix `SOA-TEXT-NNN` for narrative-only rules. Use `SOA-CROSS-NNN` for cross-visit / protocol-wide rules (same prefix Phase 1 step 5 already uses for its cross-visit output).
+
+**Sub-area turn templates** (defined in `scripts/gemini_extract.py::SUB_AREA_TURNS["SOA"]`; mirrored for Claude sub-agents):
+
+1. Drug administration timing & separations — §5/§7 narrative (drug-to-drug gaps, infusion durations, order-of-administration).
+2. Study-wide duration & schedule meta-rules — §3/§4 narrative (total duration caps, "all visits must occur", screening→randomization windows).
+3. Cross-visit procedure methodology — §6 narrative (rules applying identically across all visits of a procedure — technique, equipment, sample handling).
+4. Long-term follow-up obligations — §9/§10 narrative (vital status, SAE collection at LTFU, ulcer-recurrence windows).
+5. Global visit windows & tolerances — visit-schedule narrative (±3/±7 day windows applying uniformly, grace periods, missed-visit rules).
+6. Sample & volume caps — cumulative/study-wide caps on blood volume, tissue samples, imaging doses.
+
+**Output merging**: SOA-text KRIs are appended to `raw_SOA.json` alongside Phase 1 output. Overlap with Phase 1 step 5 cross-visit rules is expected by design — the existing cross-domain + intra-domain dedup passes (Step 4A-Dedup) resolve it using the same logic applied to any cross-origin duplicate. No new dedup logic is required.
+
+**Tier logic**: identical to ELIG/SAF/END/OPS — 10-agent panel, T1 7–10 auto-approved, T2 4–6 user decision, T3 1–3 promotion pipeline. Reuses the existing tier infrastructure.
+
+**Scope boundary vs. OPS**: if a rule is purely about *how* a procedure is performed (technique, equipment, position), that's OPS — not SOA-text. SOA-text only captures rules about *when/where/how-often* procedures occur across visits, and cross-visit coordination. Per-visit technique details remain in OPS.
+
+---
 
 ### Step 2.5 — Section Obligation Inventory (MANDATORY, runs after each domain extraction)
 
@@ -1243,7 +1277,7 @@ results = run_gemini_extraction_multi_turn(
 save_gemini_results(results, out_dir, "END")
 ```
 
-**Scope**: The multi-turn method is used ONLY for Phase 2 domain extraction of ELIG, SAF, END, OPS. SOA is unchanged (uses the 6-step deterministic process, not multi-agent extraction). Claude sub-agents are unchanged (they already iterate via the Agent tool).
+**Scope**: The multi-turn method is used for Phase 2 domain extraction of ELIG, SAF, END, OPS, and **SOA-text** (the new text-only SOA layer — see "SOA-text Phase 2 extraction" below). The Phase 1 SOA deterministic process (Camelot + footnote mapping + Phase-1 step-5 cross-visit rules) is **unchanged** — it still produces the authoritative procedure × visit grid and cell-level KRIs. SOA-text runs as an additive layer that captures narrative / cross-visit / protocol-wide SOA rules the table process does not produce. Claude sub-agents are unchanged (they already iterate via the Agent tool).
 
 **Backward compatibility**: The original `run_gemini_extraction()` (single-shot, text prompt, no PDF) is kept for other uses — e.g., Step 3B accuracy judging, Step 3.5 orphan scan — where single-shot is appropriate.
 
