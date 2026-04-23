@@ -125,7 +125,16 @@ def get_kris_citing_pages(all_kris, page_set):
     return matching
 
 
-# ─── Scanner prompt ─────────────────────────────────────────────────────────
+# ─── Scanner prompts ────────────────────────────────────────────────────────
+# Two prompt variants:
+#   SCAN_PROMPT_TEMPLATE         — standard: section has existing KRIs; agents
+#                                  flag only statements NOT covered by them.
+#   ZERO_KRI_SCAN_PROMPT_TEMPLATE — emphasized: section has ZERO existing KRIs;
+#                                  agents apply maximum recall and extract every
+#                                  rule-like statement as a candidate orphan.
+#                                  This closes the gap where Phase 2 produced no
+#                                  KRIs for a section and the orphan scan was
+#                                  the last safety net.
 SCAN_PROMPT_TEMPLATE = """You are scanning a portion of a clinical trial protocol for rule-like statements that are NOT already captured by the existing extracted KRIs.
 
 A rule-like statement is ANY of: obligation, threshold, prohibition, requirement, schedule, procedure, criterion, timing, method, stopping rule, reporting rule, eligibility sub-criterion, endpoint definition, statistical method, or governance rule.
@@ -156,7 +165,41 @@ Find every rule-like statement that is NOT already covered by one of the existin
 Return ONLY the JSON array. No markdown. No prose. Empty array [] if no orphans found."""
 
 
+ZERO_KRI_SCAN_PROMPT_TEMPLATE = """You are scanning a portion of a clinical trial protocol. **This section has ZERO existing extracted KRIs** — Phase 2 extraction produced no KRIs citing any page in this section, and this scan is the last safety net before the pipeline advances.
+
+Because no existing KRIs cover this section, every rule-like statement you find here is very likely an orphan. Apply MAXIMUM RECALL — extract every obligation, threshold, prohibition, requirement, schedule, procedure, criterion, timing, method, stopping rule, reporting rule, eligibility sub-criterion, endpoint definition, statistical method, or governance rule you can identify. Do not filter, do not self-edit, do not assume anything is "too minor" — adjudication and cross-check will filter false positives later.
+
+If this section genuinely contains no rule-like content (e.g. title page, table of contents, references, signature block), return an empty array. Otherwise err strongly toward flagging.
+
+CRITICAL — ATOMIZATION IS NOT DUPLICATION:
+A compound rule in the protocol with N atomic sub-conditions becomes N separate orphan candidates. Do not collapse them.
+
+PROTOCOL TEXT:
+{section_text}
+
+Return a JSON array, one entry per candidate orphan:
+[
+  {{
+    "candidate_text": "the rule-like statement as a verbatim or near-verbatim excerpt from the protocol (<=30 words)",
+    "page": <page number where it appears>,
+    "surrounding_context": "<=50 words of context around the statement for disambiguation",
+    "proposed_domain": "SOA|ELIG|SAF|END|OPS",
+    "reason_not_covered": "zero-KRI section — no existing KRI covers this content"
+  }},
+  ...
+]
+
+Return ONLY the JSON array. No markdown. No prose. Empty array [] only if the section genuinely has no rule-like content."""
+
+
 def build_scan_prompt(section_text, existing_kris):
+    """Pick the prompt variant based on whether the section has any existing KRIs.
+
+    Zero-KRI sections get the emphasized maximum-recall prompt; sections with
+    existing KRIs get the standard "find what's not already covered" prompt.
+    """
+    if not existing_kris:
+        return ZERO_KRI_SCAN_PROMPT_TEMPLATE.format(section_text=section_text)
     kri_list = json.dumps(
         [
             {"kri_id": k["kri_id"], "rule_for_llm": k.get("rule_for_llm", "")}
@@ -463,6 +506,9 @@ def run_orphan_scan(output_dir, pdf_path):
     primary_candidates = []
     section_map = manifest.get("section_map", {})
     claimed_pages = set()
+    # Per-section coverage audit — records existing-KRI count and whether the
+    # section triggered the zero-KRI emphasis prompt. Written to the report.
+    section_coverage_audit = []
 
     for domain_key, sections in section_map.items():
         if not isinstance(sections, list):
@@ -484,9 +530,11 @@ def run_orphan_scan(output_dir, pdf_path):
 
             existing = get_kris_citing_pages(all_kris, set(page_range))
             section_number = section.get("section_number", "?")
+            is_zero_kri = len(existing) == 0
+            tag = " [ZERO-KRI → emphasized scan]" if is_zero_kri else ""
             print(
                 f"  [{domain_key}] §{section_number} pp {start}-{end} "
-                f"({len(existing)} existing KRIs)...",
+                f"({len(existing)} existing KRIs){tag}...",
                 flush=True,
             )
 
@@ -494,7 +542,16 @@ def run_orphan_scan(output_dir, pdf_path):
             for c in candidates:
                 c["_source"] = "primary_section_sweep"
                 c["_section"] = section_number
+                c["_is_zero_kri_section"] = is_zero_kri
             primary_candidates.extend(candidates)
+            section_coverage_audit.append({
+                "domain": domain_key,
+                "section": section_number,
+                "pages": [start, end],
+                "existing_kri_count": len(existing),
+                "is_zero_kri_section": is_zero_kri,
+                "candidates_flagged": len(candidates),
+            })
             print(f"    → {len(candidates)} candidate(s)")
 
     # ── Phase 2 — Secondary page sweep (orphan pages) ──────────────────────
@@ -607,6 +664,10 @@ def run_orphan_scan(output_dir, pdf_path):
         },
         "primary_sweep": {
             "total_candidates": len(primary_candidates),
+            "zero_kri_sections": [
+                s for s in section_coverage_audit if s["is_zero_kri_section"]
+            ],
+            "section_coverage_audit": section_coverage_audit,
         },
         "secondary_sweep": {
             "orphan_pages": orphan_pages,

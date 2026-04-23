@@ -1377,6 +1377,8 @@ Return ONLY the JSON.
 
 **Phase 1 — Primary section sweep (section-by-section)**: For each section in `manifest.json`, each of the 6 agents independently scans the section's full text with the list of existing KRIs already citing pages in that section. Each agent returns candidate orphan rule-like statements.
 
+**Zero-KRI section emphasis** (mandatory): sections where the existing-KRI list is empty are flagged as zero-KRI sections and dispatched with an alternate prompt variant that instructs maximum recall — every rule-like statement is treated as a candidate orphan, no self-filtering, no "too minor" filtering. Per-section coverage (existing-KRI count, zero-KRI flag, candidates flagged) is recorded in `orphan_scan_report.json` under `primary_sweep.section_coverage_audit`. See SKILL.md Step 3.5 full spec for terminology (note: "zero-KRI section" here is distinct from Step 2.5's "uncovered obligations" — different scope).
+
 **Phase 2 — Secondary page sweep (orphan pages only)**: For every PDF page NOT claimed by any section in `manifest.json`, run the same 6-agent scan page-by-page.
 
 **Phase 3 — Consolidation** (high-recall candidate, consensus promotion):
