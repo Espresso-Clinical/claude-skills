@@ -232,18 +232,54 @@ Merged duplicates are logged to `intra_dedup_report.json`.
 
 **Artifacts:** `protocol_dedup_report.json`, `intra_dedup_report.json`.
 
-### Stage 6 — NDEF sweep
+### Stage 6 — NDEF sweep (two-pass: regex pre-screen → 6-judge panel)
 
-Sweep every surviving KRI and set `ndef: true` if the rule **cannot be deterministically checked** by a downstream LLM-based monitoring agent. Non-definable indicators include:
+Mirrors the protocol skill's Step 4A-NDEF mechanism. NDEF is a **post-extraction reclassification**, never an extraction target. Stage 6 runs after dedup and before final verification.
 
-- Rules with open-ended judgment language: "as appropriate", "where feasible", "at the Sponsor's discretion", "the CRA should use judgment", "if clinically indicated"
-- Purely advisory or descriptive statements with no verifiable action
-- Rules requiring external information not available from trial data (e.g., regulatory-interpretation dependent)
-- Rules whose threshold/timing is not specified and cannot be inferred
+**What "non-definable" means.** A KRI is non-definable if its `rule_for_llm` cannot produce a deterministic YES/NO answer when applied to concrete subject/trial data. This includes (binding definition):
 
-NDEF items are **moved to a separate `ndef_kris` array in the final output** — they do not enter the main `kris` array. They are preserved (not deleted) so the user can still see what the document contains.
+- **Discretion language** — "at the [Sponsor's / Investigator's / CRA's / Pharmacist's / Doctor's] discretion", "as deemed appropriate", "if deemed necessary".
+- **Investigator clinical judgment** — "in the investigator's opinion", "if clinically significant", "clinically relevant", "per clinical judgment", "if clinically indicated".
+- **Undefined time windows** — "as soon as possible", "promptly", "in a timely manner", "without undue delay", "reasonable time".
+- **Undefined effort or quantity** — "reasonable effort", "best effort", "great efforts", "adequate", "sufficient", "appropriate" (when standalone, not modifying a measurable threshold).
+- **Subjective thresholds** — qualitative judgments substituted for measurable values.
+- **"According to clinical need" / "as needed"** — standalone, with no concrete trigger or threshold defined.
+- **Any other non-binary wording** — if the rule cannot be rewritten as a concrete check against a data field with a deterministic YES/NO answer, it is NDEF.
 
-**Artifact:** `ndef_sweep_report.json` (lists every KRI evaluated, the verdict, and the trigger phrase when flagged).
+**What is NOT NDEF (be conservative — keep in main list):**
+- A rule with a concrete threshold or window (e.g., "within 24 hours", "100% SDV", "≥80% compliance") is definable, even if the surrounding paragraph contains soft language.
+- A rule whose target role is named ("the PVR will…") is definable as long as the action and condition are concrete.
+- A rule that references an external SOP / protocol / IB is definable when the obligation itself can be checked (e.g., "the IB version current at time of event was used" is definable; "the IB should be consulted as appropriate" is NDEF).
+- A borderline / "on-the-seam" rule **stays in the main list** — only flag NDEF if the rule clearly fails the YES/NO test.
+
+**Two-pass implementation:**
+
+**Pass 6.1 — Regex candidate flagging (cheap, broad).**
+`scripts/run.py ndef` scans every KRI's `rule_for_llm` and `supporting_quote` for the trigger phrases above. A KRI hit by any trigger is **flagged as a candidate** for NDEF — not classified yet. Output: each KRI carries a temporary `ndef_candidate: true` and the matched phrase(s).
+
+**Pass 6.2 — 6-judge panel adjudication (LLM, definitive).**
+A 6-judge cross-model panel (3 Claude + 3 Gemini) reviews **every candidate** flagged by Pass 6.1 PLUS a 10% random sample of non-candidates (false-negative check). Each judge votes one of:
+
+- `NON_DEFINABLE` — the rule cannot produce a YES/NO answer.
+- `DEFINABLE` — the rule can produce a YES/NO answer (rationale required).
+- `BORDERLINE` — close call (rationale required).
+
+**Voting tiers (mirror protocol skill):**
+
+| Votes | Disposition |
+|-------|-------------|
+| **5–6 NON_DEFINABLE** | Auto-classify as NDEF. `ndef = true`. Rewrite `rule_for_llm` as `"NDEF — Non-verifiable: <reason from panel consensus>"`. |
+| **3–4 NON_DEFINABLE** | **Surface to user** in `flagged_review_decisions.json`. User decides per-KRI (NDEF / keep in main / edit rule). |
+| **0–2 NON_DEFINABLE** | Keep in main list. `ndef = false`. |
+
+**Default bias is conservative — keep in main.** A rule must be clearly non-checkable (5+ judges, or user confirmation) to be classified NDEF. Borderline cases stay in the main list.
+
+**Output placement:**
+- NDEF KRIs are **preserved in the same `accompanying_golden_set.json` file** under a separate `ndef_kris` array.
+- In the Excel deliverable, NDEF KRIs appear **as a second table on the same sheet, below the main KRI table** (separated by a blank row + a labeled header row "Non-Definable KRIs"), not on a separate sheet. They use **the same column structure** as the main table.
+- Both the JSON `ndef_kris` array and the Excel sub-table preserve the NDEF KRI's `kri_id` (assigned by Stage 8 in continuation of the main numbering), `kri_name`, `description`, `doc_type_label`, the rewritten `rule_for_llm`, and `combined_ref`.
+
+**Artifact:** `ndef_sweep_report.json` — for every evaluated KRI: the candidate flag, matched trigger phrase(s), per-judge votes with rationale, panel tally, final disposition, and (if user-resolved) the user decision.
 
 ### Stage 7 — Final verification (correctness check, blocking gate)
 
@@ -287,7 +323,12 @@ A **5-judge cross-model panel (3 Claude + 2 Gemini)** independently reviews **EV
      "ndef_kris":  [ ... ]
    }
    ```
-4. Render `Accompanying_KRIs.xlsx` with one sheet `KRIs` + one sheet `NDEF` + one sheet `Dropped (vs protocol)`. Main columns: `KRI ID`, `KRI Name`, `Description`, `Doc Type`, `Rule for LLM`, `Document Reference & Quote` (= `combined_ref`), `Severity`, `NDEF`.
+4. Render `Accompanying_KRIs.xlsx`:
+   - **One main sheet `KRIs`** containing the main KRI table at the top, then a blank row, then a labeled header row `Non-Definable KRIs`, then the NDEF sub-table (same column structure as the main table).
+   - **One auxiliary sheet `Dropped (vs protocol)`** listing KRIs removed at Stage 5a with the matched protocol KRI ID and match score.
+   - **Column structure (identical to the protocol-kri-extractor skill, applied to both the main table and the NDEF sub-table):**
+     | KRI ID | Category | KRI Name | Description | Rule for LLM | Document Reference & Quote |
+     where **Category** = the document type label (e.g., `IMP Handling Manual`, `Pharmacovigilance Plan`) and **Document Reference & Quote** = `combined_ref`. **Severity** is preserved in the JSON output but is NOT a column in the Excel — matching the protocol skill's column set exactly.
 
 **Artifacts:** `accompanying_golden_set.json`, `Accompanying_KRIs.xlsx`.
 
@@ -332,7 +373,8 @@ Claude, when this skill is invoked, you do the following in order:
 8. **Launch the orphan-scan panel** (2 Claude + 2 Gemini, page-by-page) and apply the promotion gates. Save to `orphan_scan_report.json`.
 9. **Run `python scripts/dedup_vs_protocol.py`** to drop KRIs already in the protocol golden set. Save to `protocol_dedup_report.json`.
 10. **Run `python scripts/intra_dedup.py`** for within-document dedup. Save to `intra_dedup_report.json`.
-11. **Run `python scripts/ndef_sweep.py`** (or launch an Agent with the NDEF rules from SKILL.md if the script is a stub). Save to `ndef_sweep_report.json`.
+11. **Stage 6 NDEF — Pass 6.1:** Run `python scripts/run.py ndef` to produce the regex candidate set. Output: `ndef_sweep_report.json` (Pass 6.1 entry) + `after_ndef.json` with each KRI carrying `ndef_candidate` and `ndef_trigger_phrases`.
+11a. **Stage 6 NDEF — Pass 6.2:** Launch a 6-judge cross-model panel (3 Claude + 3 Gemini) on every Pass 6.1 candidate AND a 10% random sample of non-candidates. Each judge votes NON_DEFINABLE / DEFINABLE / BORDERLINE. Apply the voting tiers (5–6 → auto-NDEF; 3–4 → surface to user; 0–2 → keep in main). For confirmed NDEF KRIs, **rewrite `rule_for_llm`** as `"NDEF — Non-verifiable: <reason from panel consensus>"` and set `ndef = true`. Append the panel record to `ndef_sweep_report.json`.
 12. **Launch the Stage 7 verification panel** (5 judges). Save to `verification_report.json`. **Blocking gate: 100% PASS before continuing.**
 13. **Run `python scripts/assemble.py`** to produce `accompanying_golden_set.json` and `Accompanying_KRIs.xlsx`.
 14. Report back to the user with counts, location, and any surfaced flags.
