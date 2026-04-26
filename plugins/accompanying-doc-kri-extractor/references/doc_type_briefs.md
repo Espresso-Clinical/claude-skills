@@ -21,29 +21,73 @@ Universal extraction targets (apply to every doc type):
 
 ## CMP — Clinical Monitoring Plan
 
-**What it is.** Defines how the sponsor/CRO monitors the trial: monitoring strategy, visit types and frequency, Source Data Verification (SDV) coverage, remote vs on-site monitoring, Risk-Based Monitoring (RBM) triggers, site escalation paths, monitor qualifications, CAPA handling for monitoring findings.
+**What it is.** Defines how the sponsor/CRO monitors the trial: monitoring strategy and responsibility splits, visit types and frequency, on-site CRA behavioral expectations, Source Data Verification (SDV) and Source Data Review (SDR) scopes and caps, remote vs on-site monitoring, Risk-Based Monitoring (RBM) triggers, site escalation paths, the multi-stage report lifecycle for each report type, regulatory-gating-at-the-monitoring-level (e.g., RGL before screening), informed-consent timing relative to first visit, visit-bound CRA tasks (collect named logs, review named forms), end-of-trial monitoring activities, special-circumstance review workflows (paper ePRO transcription, re-screening), required eCRF entry minimums for special cases (e.g., screen failures), composite status definitions (e.g., "fully monitored"), and document/email archival format requirements.
 
 **Key KRI categories:**
-- SDV coverage rules (percentages by CRF page type, by visit, by endpoint category)
-- Visit type definitions and frequency (site initiation, routine, interim, close-out; on-site vs remote)
-- Monitoring visit windows (must be completed within N days of …)
-- Risk-trigger thresholds (data query rate, PD rate, AE reporting lag, enrollment rate triggering escalation)
-- Site escalation rules (when to escalate, to whom, within what window)
-- Report turnaround times (monitoring visit report due N days after visit)
-- Action-item / CAPA closure windows
-- Monitor qualifications and training requirements
+- Monitoring responsibility split by country / region — when one entity monitors specific countries and another entity monitors others, extract one KRI per (entity × country/region)
+- CRA on-site behavioral expectations — periodic actions the CRA must perform during on-site visits (e.g., email check at a defined cadence)
+- Regulatory Green Light (RGL) — both the gating rule (no screening before RGL) AND the RGL signature timeline post-SIV; each is its own KRI
+- Multi-stage report lifecycle per report type — every named report (SIV report, Monitoring Visit Report, Centralized Monitoring Report, Follow-Up Letter to PI, etc.) typically has draft / review / finalization stages with distinct timelines; extract one KRI per (report type × stage)
+- Multiple report types with distinct cadences and recipients — SIV report, MVR, Centralized Monitoring Report (often monthly), Follow-Up Letter (FUL) to the PI
+- SDV scope rules with quantitative thresholds — distinct KRIs per (data domain × percentage × deadline-or-cap). Examples: 100% SDV of AEs; 100% SDV of SAEs; 100% SDV of eligibility within N monitoring visits after inclusion; SDV percentages by CRF-page type, by visit, by endpoint category
+- SDR scope caps — numeric limits on SDR work (e.g., not beyond Nth screen failure per site per phase); preserve the cap unit faithfully
+- Special-circumstance review workflows — emergency paper ePRO transcription → CRA on-screen review → MVR documentation; re-screening with sponsor approval and reason recorded in source
+- Required eCRF entry minimums for special cases — even when most procedures for a subject are skipped (e.g., screen failures), specific eCRF pages must still be entered. Treat as a single KRI verifying the named pages were entered.
+- Visit-bound CRA tasks — actions the CRA must perform AT each monitoring visit (collect named logs, review named forms, perform named SDV activities); each task is its own KRI
+- Re-screening documentation rules — sponsor decision and reason recorded in source documents
+- ICF timing relative to first visit — pre-visit / at-visit and always before any study procedure
+- IMP-related monitoring activities — collection of blinded IMP temperature logs at each visit; review and SDV of named injection/administration logs
+- End-of-trial monitoring activities — final IMP accountability post-Database Lock; completion of named Reconciliation and Destruction form
+- "Fully monitored" composite status definition — multi-condition criterion (no further visits expected + SDR completed + essential pages SDV'ed + no outstanding queries/reports). Typically one KRI verifying all conditions; split only if individual conditions have their own timing.
+- Email / document archiving format requirements — specific format mandated for metadata retention (e.g., .msg or equivalent)
+- Visit type definitions and frequency (Site Initiation, routine, interim, close-out; on-site vs remote) — and visit-window rules
+- Monitoring visit windows (must be completed within a defined interval of a named trigger)
+- Risk-trigger thresholds (data query rate, PD rate, AE reporting lag, enrollment rate, etc.) and the action they trigger
+- Site escalation rules — when to escalate, to whom, within what window
+- Action-item / CAPA closure windows from monitoring findings
+- Monitor qualifications and training requirements (qualifications, study-specific training, refresher cadence)
 - Co-monitoring / oversight rules
+- Working-day vs calendar-day distinctions — preserve the unit faithfully whenever the doc names one
 
 **Examples (illustrative, not exhaustive):**
-- "Verify that SDV coverage for primary endpoint CRF pages is 100%."
-- "Verify that every routine monitoring visit was followed by a monitoring visit report filed within 10 business days."
-- "Verify that any site with a query resolution time >14 days was escalated to the Lead CRA."
-- "Verify that the Site Initiation Visit occurred before any subject was enrolled at that site."
+- "Verify that monitoring activities at sites in each country were performed by the entity assigned to that country in the CMP."
+- "Verify that the CRA performed the on-site behavioral activities mandated by the CMP at the cadence specified (e.g., email check during on-site visits)."
+- "Verify that the site received the Regulatory Green Light before initiating any subject screening."
+- "Verify that the Regulatory Green Light form was signed within the timeline specified after the Site Initiation Visit."
+- "Verify that the first draft of the Site Initiation Visit report was sent to the reviewer within the timeline specified."
+- "Verify that the first draft of each Monitoring Visit Report was sent to the reviewer within the timeline specified."
+- "Verify that each Monitoring Visit Report was finalized within the timeline specified."
+- "Verify that the Follow-Up Letter to the Principal Investigator was provided within the timeline specified after each monitoring visit."
+- "Verify that the Centralized Monitoring Report was generated and finalized within the timeline specified after the data extraction date."
+- "Verify that 100% Source Data Verification was completed for every reported Adverse Event."
+- "Verify that 100% Source Data Verification was completed for every reported Serious Adverse Event."
+- "Verify that 100% SDV for subject eligibility was completed within the number of monitoring visits specified after subject inclusion."
+- "Verify that no Source Data Review was performed beyond the cap defined in the CMP for screen-failed subjects per site per phase."
+- "Verify that for subjects whose ePROs were entered on paper under emergency circumstances, the CRA performed an on-screen review and documented it in the Monitoring Visit Report."
+- "Verify that the eCRF pages required for screen-failed subjects under the CMP were fully entered."
+- "Verify that for any re-screened subject, the source documents contained the sponsor's approval decision and the reason for re-screening."
+- "Verify that the Informed Consent Form was signed before any study procedure was performed."
+- "Verify that the CRA collected the blinded IMP temperature logs at each on-site monitoring visit."
+- "Verify that the Reconciliation and Destruction form was completed by the CRA during final IMP accountability after Database Lock."
+- "Verify that subjects marked as 'fully monitored' satisfied all composite-status conditions defined in the CMP."
+- "Verify that required email correspondence was archived in the format mandated by the CMP for metadata retention."
+
+**Pattern hints — CMP-specific extraction guidance:**
+- **Multi-stage report lifecycle expands per (report type × stage).** For each named report (SIV / MVR / Centralized / FUL / etc.), expect distinct draft, review, and finalization timelines; extract each stage as its own KRI rather than collapsing into one rule.
+- **SDV/SDR scope rules expand into multiple KRIs.** For each named data domain (AEs / SAEs / eligibility / primary endpoint / etc.), the doc usually specifies a percentage and a deadline or cap. Extract one KRI per (domain × scope × deadline-or-cap). Do not collapse "100% of AEs and SAEs" into one rule when the doc states them separately.
+- **Visit-bound CRA tasks expand into multiple KRIs** — one per discrete task the CRA must perform at each visit (collect named log A, review named form B, perform SDV on domain C). Do not collapse multiple visit-bound tasks into one "do everything at every visit" rule.
+- **Even-when-X-still-do-Y rules are easy to miss.** Screen-failure required pages, emergency paper ePRO on-screen review, re-screening documentation — these sound like exceptions but they are real obligations. Extract them.
+- **Composite status definitions are typically one KRI.** "Fully monitored" with N conditions becomes one KRI verifying all N conditions, unless the doc imposes separate timing on individual conditions (then split).
+- **Country-specific monitoring overrides expand into per-country KRIs** (same pattern as PV / PDHP / CSMP).
+- **Working-day vs calendar-day matters** — preserve units faithfully in `rule_for_llm` and `supporting_quote`.
+- **RGL has two distinct rules** — the gating rule (no screening before RGL) AND the RGL signature timeline (post-SIV). Extract both, not just the gate.
+- **Behavioral expectations during visits** (email-check cadence, attendance requirements, etc.) are real KRIs even though they feel like soft expectations — they are explicit obligations in the CMP.
 
 **What to ignore as noise:**
 - Generic background statements ("Monitoring is an important activity in clinical trials…")
 - Definitions sections that do not impose an obligation
 - Boilerplate references to ICH GCP without specific site-level action
+- Pure organizational descriptions of monitoring teams unless they assign a monitorable responsibility
 
 ---
 
