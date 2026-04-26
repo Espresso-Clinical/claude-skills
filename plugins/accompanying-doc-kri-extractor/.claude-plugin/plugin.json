@@ -1,0 +1,11 @@
+{
+  "name": "accompanying-doc-kri-extractor",
+  "version": "0.1.0",
+  "description": "Extracts Key Risk Indicators (KRIs) from clinical trial accompanying documents (CMP, CSMP, IMP Manual, PDHP, PV Plan, SAP, PD Classification Guide), deduplicating against the protocol's golden set.",
+  "author": {
+    "name": "Espresso Clinical",
+    "email": "eng@espressoclinical.com"
+  },
+  "license": "UNLICENSED",
+  "keywords": ["clinical", "espresso", "accompanying", "cmp", "csmp", "imp", "sap", "pdhp", "pv", "kri", "extraction"]
+}
