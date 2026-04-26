@@ -49,27 +49,57 @@ Universal extraction targets (apply to every doc type):
 
 ## CSMP — Clinical Study Management Plan
 
-**What it is.** Governs the overall operational conduct of the study across all functions: project governance, committee cadence, vendor oversight, timelines, risk management process, meeting structure, documentation structure, TMF filing.
+**What it is.** Governs the overall operational conduct of the study across all functions and parties: project governance, committee cadence, vendor and lab oversight, study-milestone gating, multi-country/multi-entity responsibility splits, approval and signature gates, tracker lifecycles, regulatory gating (e.g., green-light to start screening), TMF/eTMF format and archiving, training documentation, document approval workflows, and cross-document escalation paths.
 
 **Key KRI categories:**
-- Governance committee cadence (frequency, membership, quorum)
-- Meeting minutes filing windows
-- TMF completeness and filing deadlines (documents filed within N days of generation)
+- Governance committee cadence (frequency, membership, quorum) and minutes filing windows
+- Vendor and lab contact + CV collection — one KRI per named vendor/lab; CV is a separate sub-requirement (extract a distinct KRI when the doc requires CV in addition to contact info)
+- Multi-country / multi-entity responsibility splits — when the doc states "Entity X is responsible in country/site set A, Sponsor (or other entity) is responsible in country/site set B", extract one KRI per (entity × responsibility × region) combination
+- Approval-before-milestone gates — every "Document X must be signed/approved by Party Y before Milestone Z" becomes its own KRI (e.g., PI signs blinding plan before randomization enrollment; PV Plan approved before FSFV; BDRM minutes signed before DB Hard Lock; CSR approved before finalization; DSMB Charter approved before activation)
+- Document approval workflows — "drafted by A, reviewed by B, approved by C and D" — extract approval-by-each-party as separate KRIs
+- Tracker lifecycle — for every named tracker (MVR/FUL trackers, Training Tracker, Essential Documents Tracker, Risk Assessment Log, etc.), extract three KRIs: (1) existence/creation, (2) ongoing maintenance / update cadence, (3) final filing in the TMF at end of study
+- Regulatory gating — Regulatory Green Light (or equivalent) before any screening activity; country-specific extra Site Initiation Visits before specific study phases
+- TMF/eTMF format rules — electronic-only mandate, no parallel hard copies, archiving responsibility named
+- TMF upload responsibility splits — who uploads what, by region/site/document type
+- Database Lock & close-out gates — SDV completion + query resolution before Close Out Visit; DBL within a defined window after LPLV; signed DBL Approval form
+- Medical coding workflow — coding conventions document approval (by which parties); final medical coding approved before DB Hard Lock
+- Cross-document escalation paths — IMP issues → immediate sponsor phone call; safety issues → Medical Monitor; data issues → Data Manager — even if these duplicate other docs at extraction time, dedup against the protocol golden set is a downstream stage
+- Translation responsibility per language/country
+- Risk Assessment Log version-by-version approval cadence
+- Study-milestone timelines and deviation triggers (e.g., DBL ≤ 1 month after LPLV)
+- Training documentation — start-date and study-specific training recorded for each staff role on the named tracker
+- PI- and site-specific signature obligations (e.g., site blinding plan signed by PI before randomization)
 - Vendor oversight KPIs (SLA thresholds, performance-review cadence)
-- Risk register update cadence
-- Study milestone timelines and deviation triggers
-- Escalation paths for operational issues
 - Cross-functional coordination rules (how handoffs happen between DM, Monitoring, Safety, Stats)
 
-**Examples (illustrative):**
-- "Verify that the Study Management Team meeting minutes were filed to the TMF within 5 business days of each meeting."
-- "Verify that the study risk register was reviewed and updated at least every quarter."
-- "Verify that every vendor SLA breach was logged in the issue tracker and escalated to the Vendor Oversight Lead."
+**Examples (illustrative, not exhaustive):**
+- "Verify that contact information for the main contact at each named vendor or lab is uploaded to the eTMF."
+- "Verify that a CV for the main contact at each vendor where a CV is required is uploaded to the eTMF."
+- "Verify that the country-specific entity responsible for regulatory submissions executed those submissions in its assigned countries."
+- "Verify that the Principal Investigator signed the site blinding plan before the first patient was enrolled in the randomization phase at that site."
+- "Verify that the Pharmacovigilance Plan was signed and approved by the Sponsor prior to the First Subject First Visit."
+- "Verify that minutes from the Blind Data Review Meeting were signed by both the CRO and the Sponsor before the Database Hard Lock."
+- "Verify that all Source Data Verification was completed and all data queries resolved before the Close Out Visit was marked complete."
+- "Verify that the Database Lock occurred within one month of the Last Patient Last Visit."
+- "Verify that the Sponsor signed the Database Lock Approval form authorizing the lock."
+- "Verify that sites did not begin any screening activities before receiving the Regulatory Green Light via documented email communication."
+- "Verify that the named Essential Documents Tracker was maintained throughout the study and filed in the TMF at study end."
+- "Verify that the Trial Master File was maintained electronically and no parallel hard-copy file was kept."
+
+**Pattern hints — CSMP-specific extraction guidance:**
+- **Responsibility splits expand into multiple KRIs.** When the doc says "Entity X for region A, Entity Y for region B," extract one KRI per (entity × responsibility × region). Do not collapse into a single rule.
+- **Approval gates are everywhere.** Every "X must be approved/signed by Y before Z" is one KRI. Scan for verbs: "approve", "sign", "review", "endorse", "authorize" — each combined with a milestone.
+- **Trackers have a 3-part lifecycle.** For each named tracker, extract: (1) it exists, (2) it is maintained per the stated cadence, (3) it is filed in the TMF at end of study. Three KRIs minimum per tracker.
+- **Vendor rules multiply by number of vendors named.** A blanket "contact info for the main contact at each lab is uploaded to eTMF" becomes one KRI per named lab. The CSMP usually enumerates them.
+- **Country-specific extra steps are common.** When one country/region has additional requirements that others don't, extract a separate KRI per country (or one KRI scoped to that country) — never bury in a "global" rule.
+- **Cross-doc echoes are expected.** CSMP frequently restates rules from the IMP Manual / PV Plan / SAP at the process level. Extract them anyway — the Stage 5a dedup-vs-protocol step (and the no-cross-accompanying-doc-dedup design) handles redundancy correctly downstream.
 
 **What to ignore:**
 - Organization-chart content (unless it imposes a monitorable responsibility)
-- Contact lists
-- Generic project-management philosophy
+- Generic project-management philosophy and rationale paragraphs
+- Boilerplate SOP cross-references that impose no specific action
+- TMF section index numbering / formatting standards (unless tied to a deliverable obligation)
+- Pure contact lists with no associated obligation
 
 ---
 
