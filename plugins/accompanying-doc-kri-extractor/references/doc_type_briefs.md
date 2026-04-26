@@ -32,13 +32,13 @@ Universal extraction targets (apply to every doc type):
 - SDV scope rules with quantitative thresholds — distinct KRIs per (data domain × percentage × deadline-or-cap). Examples: 100% SDV of AEs; 100% SDV of SAEs; 100% SDV of eligibility within N monitoring visits after inclusion; SDV percentages by CRF-page type, by visit, by endpoint category
 - SDR scope caps — numeric limits on SDR work (e.g., not beyond Nth screen failure per site per phase); preserve the cap unit faithfully
 - Special-circumstance review workflows — emergency paper ePRO transcription → CRA on-screen review → MVR documentation; re-screening with sponsor approval and reason recorded in source
-- Required eCRF entry minimums for special cases — even when most procedures for a subject are skipped (e.g., screen failures), specific eCRF pages must still be entered. Treat as a single KRI verifying the named pages were entered.
+- Required eCRF entry minimums for special cases — even when most procedures for a subject are skipped (e.g., screen failures), specific eCRF pages must still be entered. **Extract one KRI per required eCRF page** (atomic). Do not collapse the list.
 - Visit-bound CRA tasks — actions the CRA must perform AT each monitoring visit (collect named logs, review named forms, perform named SDV activities); each task is its own KRI
 - Re-screening documentation rules — sponsor decision and reason recorded in source documents
 - ICF timing relative to first visit — pre-visit / at-visit and always before any study procedure
 - IMP-related monitoring activities — collection of blinded IMP temperature logs at each visit; review and SDV of named injection/administration logs
 - End-of-trial monitoring activities — final IMP accountability post-Database Lock; completion of named Reconciliation and Destruction form
-- "Fully monitored" composite status definition — multi-condition criterion (no further visits expected + SDR completed + essential pages SDV'ed + no outstanding queries/reports). Typically one KRI verifying all conditions; split only if individual conditions have their own timing.
+- "Fully monitored" composite status definition — multi-condition criterion (no further visits expected + SDR completed + essential pages SDV'ed + no outstanding queries/reports). **Extract one KRI per condition** (atomic). Optionally one additional KRI verifying the composite-status flag was set only when all conditions were met.
 - Email / document archiving format requirements — specific format mandated for metadata retention (e.g., .msg or equivalent)
 - Visit type definitions and frequency (Site Initiation, routine, interim, close-out; on-site vs remote) — and visit-window rules
 - Monitoring visit windows (must be completed within a defined interval of a named trigger)
@@ -64,12 +64,12 @@ Universal extraction targets (apply to every doc type):
 - "Verify that 100% SDV for subject eligibility was completed within the number of monitoring visits specified after subject inclusion."
 - "Verify that no Source Data Review was performed beyond the cap defined in the CMP for screen-failed subjects per site per phase."
 - "Verify that for subjects whose ePROs were entered on paper under emergency circumstances, the CRA performed an on-screen review and documented it in the Monitoring Visit Report."
-- "Verify that the eCRF pages required for screen-failed subjects under the CMP were fully entered."
+- "Verify that each eCRF page required for screen-failed subjects under the CMP was fully entered (one KRI per required page)."
 - "Verify that for any re-screened subject, the source documents contained the sponsor's approval decision and the reason for re-screening."
 - "Verify that the Informed Consent Form was signed before any study procedure was performed."
 - "Verify that the CRA collected the blinded IMP temperature logs at each on-site monitoring visit."
 - "Verify that the Reconciliation and Destruction form was completed by the CRA during final IMP accountability after Database Lock."
-- "Verify that subjects marked as 'fully monitored' satisfied all composite-status conditions defined in the CMP."
+- "Verify that each individual condition required for a subject to be marked as 'fully monitored' was independently satisfied (one KRI per condition)."
 - "Verify that required email correspondence was archived in the format mandated by the CMP for metadata retention."
 
 **Pattern hints — CMP-specific extraction guidance:**
@@ -77,7 +77,7 @@ Universal extraction targets (apply to every doc type):
 - **SDV/SDR scope rules expand into multiple KRIs.** For each named data domain (AEs / SAEs / eligibility / primary endpoint / etc.), the doc usually specifies a percentage and a deadline or cap. Extract one KRI per (domain × scope × deadline-or-cap). Do not collapse "100% of AEs and SAEs" into one rule when the doc states them separately.
 - **Visit-bound CRA tasks expand into multiple KRIs** — one per discrete task the CRA must perform at each visit (collect named log A, review named form B, perform SDV on domain C). Do not collapse multiple visit-bound tasks into one "do everything at every visit" rule.
 - **Even-when-X-still-do-Y rules are easy to miss.** Screen-failure required pages, emergency paper ePRO on-screen review, re-screening documentation — these sound like exceptions but they are real obligations. Extract them.
-- **Composite status definitions are typically one KRI.** "Fully monitored" with N conditions becomes one KRI verifying all N conditions, unless the doc imposes separate timing on individual conditions (then split).
+- **Composite status definitions split into multiple KRIs.** "Fully monitored" with N conditions becomes N KRIs (one per condition), plus optionally one composite-flag KRI. Per the atomicity principle, default to splitting; do not collapse a list of conditions into a single rule.
 - **Country-specific monitoring overrides expand into per-country KRIs** (same pattern as PV / PDHP / CSMP).
 - **Working-day vs calendar-day matters** — preserve units faithfully in `rule_for_llm` and `supporting_quote`.
 - **RGL has two distinct rules** — the gating rule (no screening before RGL) AND the RGL signature timeline (post-SIV). Extract both, not just the gate.
@@ -110,7 +110,7 @@ Universal extraction targets (apply to every doc type):
 - Cross-document escalation paths — IMP issues → immediate sponsor phone call; safety issues → Medical Monitor; data issues → Data Manager — even if these duplicate other docs at extraction time, dedup against the protocol golden set is a downstream stage
 - Translation responsibility per language/country
 - Risk Assessment Log version-by-version approval cadence
-- Study-milestone timelines and deviation triggers (e.g., DBL ≤ 1 month after LPLV)
+- Study-milestone timelines and deviation triggers (e.g., Database Lock within a defined window after Last Patient Last Visit)
 - Training documentation — start-date and study-specific training recorded for each staff role on the named tracker
 - PI- and site-specific signature obligations (e.g., site blinding plan signed by PI before randomization)
 - Vendor oversight KPIs (SLA thresholds, performance-review cadence)
@@ -226,7 +226,7 @@ Universal extraction targets (apply to every doc type):
   - Single-actor restriction on a system action (e.g., only the review-round initiator may press a Refresh button)
   - Backup copy convention in a named sub-folder (e.g., .xls copy in a CTM folder)
   - Per-review-round filing (file at end of each round)
-- Investigator oversight log — multi-step chained obligation (extract / print / review / sign / date / file in the ISF) at a fixed cadence. Typically one KRI verifying the chain completed at the required cadence; split into multiple KRIs if the doc imposes separate timing on individual steps.
+- Investigator oversight log — multi-step chained obligation (extract / print / review / sign / date / file in the ISF) at a fixed cadence. **Extract one KRI per step in the chain** (atomic). Each step (extract, print, review, sign, date, file) is its own verifiable check. Optionally add one composite KRI verifying the full chain was completed at the required cadence.
 - Final approval gate — all PDs approved by a named role (e.g., Sponsor) before a named milestone (e.g., BDRM)
 - Final TMF archival — final PD report including all review comments filed to the TMF at study end
 - Training requirements split by audience — site staff (typically trained at SIV) and study team (typically trained before engagement AND before FSFV); both with documentation obligation
@@ -251,7 +251,7 @@ Universal extraction targets (apply to every doc type):
 - "Verify that the first PD review occurred at the interval specified after the named milestone, and that subsequent reviews occurred at the specified cadence."
 - "Verify that for the country with override rules, PD reporting was performed by the role named in the PDHP for that country."
 - "Verify that the PD report file resides at the exact path specified in the PDHP and was not renamed or removed."
-- "Verify that the investigator oversight chain (extract / print / review / sign / date / file in ISF) was completed at the cadence specified in the PDHP."
+- "Verify that each step of the investigator oversight chain (extract, print, review, sign, date, file in ISF) was independently performed at the cadence specified in the PDHP — one KRI per step."
 - "Verify that all PDs received final approval from the named role prior to the named milestone."
 - "Verify that PD-handling training for site staff is documented in the Site Initiation Visit report."
 - "Verify that PD-handling training for study team members is documented before their engagement in the study and before First Subject First Visit."
@@ -262,7 +262,7 @@ Universal extraction targets (apply to every doc type):
 - **Two-tier reviewer responsibilities expand into multiple KRIs** — one per (classification × reviewer role).
 - **Country-specific reporting/oversight overrides** are common — extract per-country KRIs whenever the doc names a country with different rules from the default.
 - **System hygiene rules are easy to miss.** Single-actor button restrictions, file-path preservation, naming preservation, and backup-copy conventions are real obligations and become real KRIs.
-- **Multi-step chained obligations** (extract-print-review-sign-date-file) typically become one KRI verifying the full chain at the required cadence — but split into multiple KRIs if the doc imposes separate timing on individual steps.
+- **Multi-step chained obligations** (extract-print-review-sign-date-file) split into one KRI per step. Per the atomicity principle, default to splitting. Optionally add one composite KRI for the full chain at the required cadence.
 - **Training-documented-before-X is a recurring pattern.** Extract one KRI per (audience × event-trigger). Site staff at SIV is one KRI; study team before engagement is another; study team before FSFV is another (and may overlap with the engagement KRI — extract both, dedup downstream).
 - **Process prohibitions are KRIs too.** "No prospective waivers", "do not rename the report file", "no classification changes without notification" — each is a verifiable obligation.
 
@@ -299,7 +299,7 @@ Universal extraction targets (apply to every doc type):
   - Operational study staff barred from unblinded safety information
   - PI emergency unblinding notification to PVR/safety responsible without revealing the result
   - Unblinded subject tracking ledger (overview document of subjects unblinded + persons informed)
-- Reconciliation activities — periodic SAE reconciliation; minimum field list for reconciliation (subject ID, event term, onset/stop, outcome, severity, seriousness, causality, IMP admin date — confirm the doc's actual list); pregnancy reconciliation across eCRF + dedicated form; un-finalised SAE follow-up queries
+- Reconciliation activities — periodic SAE reconciliation; **for the minimum field list, extract one KRI per field** (each field is a discrete reconciliation check); pregnancy reconciliation across eCRF + dedicated form; un-finalised SAE follow-up queries
 - Discrepancy query workflow — queries to Investigator with CRA copied; resolution responsibility
 - Pregnancy module — notification timeline (regardless of whether an AE occurred); postpartum follow-up duration; submission channel; reconciliation
 - Cross-trial / cross-program expedited sharing — expedited reports shared between unblinded teams across studies involving the same IMP; tiered timelines by severity; weekend/holiday adjustment; single-platform-submission rule (the originating party submits to the regulatory platform; the other does not, to avoid duplicates)
@@ -323,9 +323,9 @@ Universal extraction targets (apply to every doc type):
 - "Verify that any expedited reporting deadline falling on a weekend or holiday was met by the last working day prior to the deadline."
 - "Verify that any SAE report containing unblinding or personal information was re-submitted in blinded form and the original was deleted or blinded."
 - "Verify that central unblinding was performed exclusively by the designated role through the channel specified in the PV Plan."
-- "Verify that notifications of central unblinding to non-PVR roles did not reveal the treatment allocation."
+- "Verify that notifications of central unblinding to roles other than the central-unblinding role did not reveal the treatment allocation."
 - "Verify that the Investigator's Brochure used for expectedness assessment was the version current at the time of the suspected reaction."
-- "Verify that the periodic SAE reconciliation report compared all minimum key safety fields listed in the PV Plan."
+- "Verify that the periodic SAE reconciliation report compared each named minimum key safety field listed in the PV Plan (one KRI per field)."
 - "Verify that the Pregnancy Notification Form was completed and sent within the timeline specified, regardless of whether an AE occurred."
 - "Verify that the end-of-trial Safety Database transfer was delivered in the format and through the transport mechanism specified in the PV Plan."
 
@@ -336,7 +336,7 @@ Universal extraction targets (apply to every doc type):
 - **Country-specific timelines override global timelines.** Whenever a jurisdiction has stricter rules than the default, extract a separate per-country KRI rather than burying the override.
 - **Working-day vs calendar-day matters.** A "5 working days" rule is materially different from "5 calendar days". Preserve the unit faithfully in `rule_for_llm` and `supporting_quote`.
 - **Weekend/holiday adjustment is its own KRI** — separate from the base timeline rule.
-- **Reconciliation field lists** become a single KRI verifying the reconciliation covers all listed fields, not one KRI per field — unless a specific field has its own discrete obligation (e.g., "causality must be present from initial report" stands alone).
+- **Reconciliation field lists split into one KRI per field.** Per the atomicity principle, each field is a discrete check on a discrete data element. Do not collapse the list into a single rule. A field with its own additional obligation (e.g., "causality must be present from initial report") still gets that obligation extracted as a separate KRI on top of the reconciliation-coverage KRI for the same field.
 - **Cross-trial sharing rules** typically include a single-platform-submission-by-originator rule. Extract that rule explicitly — it prevents duplicate regulatory submissions.
 
 **What to ignore:**

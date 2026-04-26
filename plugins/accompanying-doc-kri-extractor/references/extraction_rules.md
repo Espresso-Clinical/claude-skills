@@ -4,14 +4,26 @@ These rules apply to **every** extraction agent (Claude and Gemini, in Stage 2),
 
 ---
 
-## 1. Atomicity
+## 1. Atomicity (the most important rule — read carefully)
 
-Every KRI must be atomic: one verifiable check about one thing in one clinical/operational context. If a single sentence in the document imposes two obligations, split it into two KRIs.
+Every KRI must be atomic: **one verifiable check about one thing in one clinical/operational context.** If a single sentence in the document imposes two obligations, split it into two KRIs. **Always prefer splitting over collapsing.** When in doubt, split.
+
+The atomicity principle is the **ground truth** — if any other rule, brief, or pattern hint anywhere in this skill seems to suggest collapsing multiple obligations into one KRI, the atomicity principle wins. The goal is **maximum granularity**: every rule, from the simplest threshold to the most complex multi-step obligation, must be broken down into as many atomic KRIs as can be defended.
 
 - ✅ "Verify that every temperature excursion was reported to the sponsor within 24 hours of detection."
 - ❌ "Verify that temperature excursions and humidity excursions are reported within 24 hours and logged in the accountability log." (3+ KRIs collapsed into one)
 
+**Splitting heuristics — when a single sentence becomes multiple KRIs:**
+- A list of items each requiring the same check → one KRI per item (e.g., a list of fields in a reconciliation, a list of vendors with the same documentation requirement, a list of eCRF pages required for screen failures, a list of conditions defining a composite status).
+- A multi-step chained obligation → one KRI per step (e.g., "extract / print / review / sign / date / file" = 6 KRIs, plus optionally one composite-completion KRI).
+- A multi-tier timeline (e.g., 24h for X, 7 days for Y, 15 days for Z) → one KRI per tier.
+- A bidirectional rule (e.g., Minor→Major notification AND Major→Minor notification) → one KRI per direction.
+- A multi-party review chain (e.g., reviewed by A within 4 days AND by B within 4 days) → one KRI per reviewer.
+- A multi-country/multi-entity responsibility split → one KRI per (entity × responsibility × region).
+
 If splitting a sentence causes one part to lose its required context, include the context in each split — but still emit separate KRIs.
+
+**An optional "composite" KRI** (one verifying that a composite status flag was set only when all underlying conditions were met) is acceptable in addition to the atomic KRIs — but never instead of them.
 
 ## 2. Verifiability
 
@@ -47,6 +59,9 @@ Always computed: `f'{document_reference} — "{supporting_quote}"'`.
 - Contains the exact threshold/value/time window from the document when present ("within 24 hours", "≥80%", "within 14 days", "100% SDV").
 - Subject of the check is specific (a site, a subject, a shipment, a visit, an SAE, etc.) — not abstract.
 - One sentence; no compound checks ("and", "or" are red flags — split into two KRIs).
+- **Must yield a binary YES/NO answer** when applied to concrete subject/trial data. The downstream LLM monitoring agent should be able to look at the data and answer "did this rule pass or fail" with no ambiguity.
+- If the rule cannot produce a clear YES/NO — because it relies on judgment ("clinically significant", "in the investigator's opinion"), undefined timing ("as soon as possible", "promptly"), undefined effort ("reasonable effort", "best effort"), or any other non-binary wording — the KRI is **non-definable (NDEF)**. NDEF KRIs are still extracted at Stage 2 (do not self-censor). Stage 6 reclassifies them.
+- Be precise about the **subject of the check** (e.g., "every SAE", "every monitoring visit", "every Cryo bag"). Avoid vague subjects like "all data" or "the trial".
 
 ## 7. `kri_name`
 
@@ -58,7 +73,10 @@ Always computed: `f'{document_reference} — "{supporting_quote}"'`.
 
 - 1-3 sentences explaining what the KRI is monitoring and why it matters for the trial.
 - Written for a human reviewer, not for the downstream LLM.
+- **Self-contained.** A reader with no prior knowledge of this trial, this document, or this skill should understand the KRI from `description` alone. Do not rely on the reader having context from earlier KRIs, the document, or the surrounding section.
+- Use full nouns over abbreviations on first mention (e.g., "Source Data Verification (SDV)" rather than "SDV"). The reader should not have to guess.
 - May include context from the document but never fabricated content.
+- Should be coherent prose — not a list of fragments — so it reads naturally for an auditor or reviewer.
 
 ## 9. `severity`
 

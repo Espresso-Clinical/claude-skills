@@ -287,28 +287,75 @@ def cmd_dedup_intra(args):
     print(f"[dedup-intra] in={len(kris)}, out={len(kept)}, merges={len(merges)}")
 
 
-# ── Stage 6: NDEF rule-based sweep ───────────────────────────────────────────
+# ── Stage 6: NDEF candidate pre-screen (regex Pass 6.1 only) ─────────────────
+#
+# This script implements ONLY Pass 6.1 (regex candidate flagging). The
+# definitive classification is done by the 6-judge panel in Pass 6.2 — the
+# top-level Claude orchestrator is responsible for that, per SKILL.md Stage 6.
+# This script's output is consumed by the panel as the candidate set.
+#
+# Design principles:
+#   - Be liberal on candidate flagging: false-positive candidates are filtered
+#     by the panel; missed candidates risk leaving NDEF KRIs in the main list.
+#   - Default disposition for non-candidates remains DEFINABLE — the panel
+#     samples 10% of non-candidates as a false-negative check.
+#   - Triggers cover the protocol skill's NDEF criteria AND user-named
+#     classes ("at the discretion of doctor/pharmacist/CRA", "according to
+#     clinical need", "best efforts", etc.).
+#   - Borderline phrases that often appear next to definable thresholds
+#     ("as required", "as necessary" alone) are intentionally NOT triggers —
+#     the panel handles them.
 
 NDEF_TRIGGERS = [
-    r"\bas appropriate\b",
-    r"\bas necessary\b",
-    r"\bwhere (?:feasible|possible|applicable)\b",
-    r"\bat the (?:sponsor'?s|investigator'?s|sponsor's|sponsor) discretion\b",
-    r"\bat the discretion of\b",
-    r"\bshould (?:consider|use (?:their )?judg[e]?ment|exercise judg[e]?ment)\b",
-    r"\bif clinically indicated\b",
-    r"\bas (?:clinically )?indicated\b",
-    r"\bsubject to\b.*\b(?:judgment|review|approval)\b",
-    r"\bif deemed\b",
-    r"\bas (?:deemed|determined) (?:appropriate|necessary)\b",
-    r"\bwhen (?:appropriate|necessary|required)\b.*\bjudg[e]?ment\b",
-    r"\bper local (?:practice|standard|guidance)\b",
+    # Discretion language — clear NDEF
+    r"\bat (?:the )?(?:sole )?discretion of\b",
+    r"\bat the (?:sponsor'?s|investigator'?s|cra'?s|pharmacist'?s|doctor'?s|physician'?s) discretion\b",
+    r"\bas deemed (?:appropriate|necessary|fit|required)\b",
+    r"\bif deemed (?:appropriate|necessary|fit|required)\b",
+    # Investigator clinical judgment
+    r"\bin the (?:investigator'?s|physician'?s|doctor'?s|pi'?s) (?:opinion|judgment|judgement)\b",
+    r"\bif clinically (?:significant|indicated|relevant|warranted)\b",
+    r"\bclinically (?:significant|relevant|indicated)\b",
+    r"\bper clinical judg(?:e)?ment\b",
+    r"\bclinical(?:ly)? judg(?:e)?ment\b",
+    # Undefined time windows
+    r"\bas soon as possible\b",
+    r"\bin a timely manner\b",
+    r"\bpromptly\b",
+    r"\bwithout undue delay\b",
+    r"\bwithin a reasonable (?:time|period)\b",
+    r"\bin due (?:time|course)\b",
+    # Undefined effort / quantity
+    r"\b(?:reasonable|best|great) effort(?:s)?\b",
+    r"\bevery effort\b",
+    r"\b(?:adequate|sufficient)(?:ly)?\b",  # standalone — panel filters when modifier
+    r"\bappropriate(?:ly)?\b(?!\s+(?:section|table|level\s*\d|procedure|form))",  # standalone
+    # "According to / as needed" — when standalone with no concrete trigger
+    r"\baccording to clinical need\b",
+    r"\baccording to (?:clinical|medical) (?:judg(?:e)?ment|practice)\b",
+    r"\bas (?:clinically )?(?:needed|required|indicated)\b",
+    r"\bif (?:medically|clinically) (?:needed|required|indicated)\b",
+    # "Where feasible / possible / applicable" without a concrete bound
+    r"\bwhere (?:feasible|possible|applicable|practical|practicable)\b",
+    r"\bwhenever (?:feasible|possible|practical|practicable)\b",
+    # Subjective / soft thresholds
+    r"\bsubject to\b.*\b(?:judg(?:e)?ment|review|approval|interpretation)\b",
+    r"\bshould (?:consider|use (?:their )?judg(?:e)?ment|exercise judg(?:e)?ment)\b",
+    r"\bwhen (?:appropriate|necessary|required)\b.*\bjudg(?:e)?ment\b",
+    # Per-local-practice (often NDEF; panel decides)
+    r"\bper local (?:practice|standard|guidance|sop)\b",
     r"\bper (?:institutional|local) policy\b",
 ]
 NDEF_RES = [re.compile(p, re.IGNORECASE) for p in NDEF_TRIGGERS]
 
 
 def cmd_ndef(args):
+    """Pass 6.1 — regex candidate pre-screen.
+
+    Marks each KRI with `ndef_candidate` (bool) and matched `trigger_phrases`.
+    Does NOT set `ndef` (final classification) — that is done by the 6-judge
+    panel (Pass 6.2) orchestrated by Claude per SKILL.md Stage 6.
+    """
     data = load_json(os.path.join(args.output_dir, "after_intra_dedup.json"))
     kris = data["kris"]
 
@@ -320,23 +367,32 @@ def cmd_ndef(args):
             m = pat.search(combined)
             if m:
                 hits.append(m.group(0))
-        ndef = bool(hits)
-        k["ndef"] = ndef
+        candidate = bool(hits)
+        # Pass 6.1 sets candidate flag and trigger phrases ONLY.
+        # Final ndef classification is set by Pass 6.2 panel.
+        k["ndef_candidate"] = candidate
+        k["ndef_trigger_phrases"] = hits
+        # ndef remains False until the panel decides.
+        if "ndef" not in k:
+            k["ndef"] = False
         results.append({
             "kri_name": k.get("kri_name"),
-            "ndef": ndef,
+            "ndef_candidate": candidate,
             "trigger_phrases": hits,
         })
 
     report = {
         "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+        "pass": "6.1 — regex candidate pre-screen",
         "n_kris": len(kris),
-        "n_ndef": sum(1 for r in results if r["ndef"]),
+        "n_candidates": sum(1 for r in results if r["ndef_candidate"]),
+        "note": "Final NDEF classification is set by the Pass 6.2 6-judge panel (orchestrated by Claude per SKILL.md Stage 6). This file is the candidate input for that panel.",
         "per_kri": results,
     }
     dump_json(report, os.path.join(args.output_dir, "ndef_sweep_report.json"))
     dump_json({"kris": kris}, os.path.join(args.output_dir, "after_ndef.json"))
-    print(f"[ndef] total={len(kris)}, ndef={report['n_ndef']}")
+    print(f"[ndef-prescreen] total={len(kris)}, candidates={report['n_candidates']}")
+    print(f"[ndef-prescreen] Pass 6.2 (6-judge panel) must run before Stage 7.")
 
 
 # ── Stage 8: Assemble ────────────────────────────────────────────────────────
@@ -381,36 +437,75 @@ def cmd_assemble(args):
     }
     dump_json(out, os.path.join(args.output_dir, "accompanying_golden_set.json"))
 
-    # Excel
+    # Excel — column structure mirrors the protocol-kri-extractor skill:
+    #   KRI ID | Category | KRI Name | Description | Rule for LLM | Document Reference & Quote
+    # NDEF KRIs appear as a second table on the SAME sheet, below the main
+    # table (separated by a blank row + a "Non-Definable KRIs" header row).
+    # Severity is preserved in JSON only — it is NOT a column in the Excel,
+    # matching the protocol skill's column set.
     try:
         from openpyxl import Workbook
+        from openpyxl.styles import Font, PatternFill, Alignment
+
         wb = Workbook()
         ws = wb.active
         ws.title = "KRIs"
-        header = ["KRI ID", "KRI Name", "Description", "Doc Type",
-                  "Rule for LLM", "Document Reference & Quote", "Severity", "NDEF"]
-        ws.append(header)
+
+        HEADER = ["KRI ID", "Category", "KRI Name", "Description",
+                  "Rule for LLM", "Document Reference & Quote"]
+
+        def kri_row(k):
+            return [k.get("kri_id"), k.get("doc_type_label"), k.get("kri_name"),
+                    k.get("description"), k.get("rule_for_llm"), k.get("combined_ref")]
+
+        bold = Font(bold=True, color="FFFFFF")
+        fill = PatternFill(start_color="1F4E79", end_color="1F4E79", fill_type="solid")
+        ndef_fill = PatternFill(start_color="C00000", end_color="C00000", fill_type="solid")
+        wrap = Alignment(wrap_text=True, vertical="top")
+
+        # ── Main table ────────────────────────────────────────────────────────
+        ws.append(HEADER)
+        for c in range(1, len(HEADER) + 1):
+            ws.cell(1, c).font = bold
+            ws.cell(1, c).fill = fill
+            ws.cell(1, c).alignment = Alignment(horizontal="center", wrap_text=True)
         for k in main_kris:
-            ws.append([k.get("kri_id"), k.get("kri_name"), k.get("description"),
-                       k.get("doc_type"), k.get("rule_for_llm"),
-                       k.get("combined_ref"), k.get("severity"),
-                       "No"])
+            ws.append(kri_row(k))
 
-        ws2 = wb.create_sheet("NDEF")
-        ws2.append(header)
-        for k in ndef_kris:
-            ws2.append([k.get("kri_id"), k.get("kri_name"), k.get("description"),
-                        k.get("doc_type"), k.get("rule_for_llm"),
-                        k.get("combined_ref"), k.get("severity"),
-                        "Yes"])
+        # ── Spacer + NDEF sub-table on same sheet ────────────────────────────
+        if ndef_kris:
+            ws.append([])  # blank row
+            label_row = ws.max_row + 1
+            ws.cell(label_row, 1, "Non-Definable KRIs").font = Font(bold=True, color="FFFFFF", size=12)
+            ws.cell(label_row, 1).fill = ndef_fill
+            ws.merge_cells(start_row=label_row, start_column=1,
+                           end_row=label_row, end_column=len(HEADER))
+            ws.append(HEADER)
+            sub_header_row = ws.max_row
+            for c in range(1, len(HEADER) + 1):
+                ws.cell(sub_header_row, c).font = bold
+                ws.cell(sub_header_row, c).fill = ndef_fill
+                ws.cell(sub_header_row, c).alignment = Alignment(horizontal="center", wrap_text=True)
+            for k in ndef_kris:
+                ws.append(kri_row(k))
 
-        # Dropped-vs-protocol sheet (optional if file exists)
+        # Apply wrap to all data rows + reasonable column widths
+        for col_letter, width in zip("ABCDEF", [12, 22, 28, 60, 60, 50]):
+            ws.column_dimensions[col_letter].width = width
+        for row in ws.iter_rows(min_row=2):
+            for cell in row:
+                cell.alignment = wrap
+
+        # ── Dropped-vs-protocol sheet (audit trail of Stage 5a) ──────────────
         prot_dedup_path = os.path.join(args.output_dir, "protocol_dedup_report.json")
         if os.path.exists(prot_dedup_path):
             rep = load_json(prot_dedup_path)
             ws3 = wb.create_sheet("Dropped (vs protocol)")
             ws3.append(["Candidate KRI Name", "Matched Protocol KRI ID", "Match Type", "Score",
                         "Candidate Rule", "Candidate Quote"])
+            for c in range(1, 7):
+                ws3.cell(1, c).font = bold
+                ws3.cell(1, c).fill = fill
             for row in rep.get("dropped", []):
                 c = row["candidate"]
                 ws3.append([c.get("kri_name"), row.get("matched_protocol_kri_id"),
