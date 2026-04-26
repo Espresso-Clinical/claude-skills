@@ -160,27 +160,72 @@ Universal extraction targets (apply to every doc type):
 
 ## PDHP — Protocol Deviation Handling Plan
 
-**What it is.** Defines how protocol deviations are identified, documented, classified, reviewed, reported, and remediated. Often paired with the PD Classification Guide but distinct: PDHP is the *process*, PD Classification Guide is the *taxonomy*.
+**What it is.** Defines how protocol deviations are identified, captured, classified, reviewed, reported, escalated, archived, and remediated. Names the source-of-truth system for PD reporting, the standardized PD term vocabulary, the per-classification reporting timelines, the reviewer responsibilities by classification, the review cadence and start triggers, country-specific reporting/oversight overrides, file/system hygiene rules for the PD report artefact, training requirements by audience, and the process prohibitions (e.g., no prospective waivers). Paired with the PD Classification Guide but distinct: PDHP is the *process*, PD Classification Guide is the *taxonomy*.
 
 **Key KRI categories:**
+- Source-of-truth declaration — the named system (typically the eCRF/EDC) is the official source for PD reporting; downstream documentation derives from it
+- Standardized PD term vocabulary — restricted list of approved PD terms; the assigned term in the system must match the approved list exactly (one KRI per "matches approved list" check; do not enumerate the list as separate KRIs)
+- Field-level reporting rules — specific values required for specific fields under specific conditions (e.g., a defined value must be selected when a PD occurs between visits)
 - Deviation identification responsibilities (who finds them, how they're captured)
-- Documentation windows (PD must be logged within N days of identification/occurrence)
-- Classification process (who classifies, when, review requirements)
-- Escalation rules by classification level (major → sponsor within N days; critical → immediate)
-- Root-cause analysis requirements
-- CAPA timelines
-- Sponsor/IRB/EC/regulatory reporting rules
+- Reporting timelines split by classification severity — distinct KRIs per (severity tier × timeline unit). Working-day timelines and clock-hour timelines are different obligations; preserve the unit faithfully.
+- Classification doubt-resolution path — when a PD's classification is unclear, consult a named role
+- Final classification deadline — tied to a named study milestone (e.g., before Database Lock; no later than Blind Data Review Meeting)
+- Bidirectional reclassification notifications — Minor→Major notification to a named recipient by a named notifier; Major→Minor notification to a named recipient by a (potentially different) named notifier. Each direction is its own KRI.
+- Two-tier reviewer responsibilities — different roles review PDs of different classifications (e.g., one role reviews Major, another reviews Minor)
+- Review cadence + start trigger — first PD review starts a defined interval after a named milestone (e.g., FSFV); subsequent reviews at a defined cadence
+- Sponsor independent periodic review — sponsor's own internal PD review meetings, separate from the CRO/site review cycle
+- Country-specific reporting overrides — when one jurisdiction names a different role as the PD reporter (e.g., CRA reports PDs instead of site staff), extract a per-country KRI
+- Country-specific oversight overrides — when one jurisdiction has a different investigator review pattern (e.g., quarterly investigator acknowledgement specific to one country), extract a per-country KRI
+- System hygiene rules for the PD report artefact:
+  - Exact file path / location (file must reside at the specified location)
+  - Naming preservation across review rounds (filename and location unchanged)
+  - Single-actor restriction on a system action (e.g., only the review-round initiator may press a Refresh button)
+  - Backup copy convention in a named sub-folder (e.g., .xls copy in a CTM folder)
+  - Per-review-round filing (file at end of each round)
+- Investigator oversight log — multi-step chained obligation (extract / print / review / sign / date / file in the ISF) at a fixed cadence. Typically one KRI verifying the chain completed at the required cadence; split into multiple KRIs if the doc imposes separate timing on individual steps.
+- Final approval gate — all PDs approved by a named role (e.g., Sponsor) before a named milestone (e.g., BDRM)
+- Final TMF archival — final PD report including all review comments filed to the TMF at study end
+- Training requirements split by audience — site staff (typically trained at SIV) and study team (typically trained before engagement AND before FSFV); both with documentation obligation
+- Process prohibitions — explicit "shall not" rules (e.g., no prospective protocol waivers; no removal/renaming of the PD report file; no classification changes without site notification)
+- Query handling timeline — separate KRI from the PD reporting timeline itself; queries on PDs must be resolved within a defined window
 - Trend analysis / recurring-deviation triggers
-- Database / deviation log entry requirements
+- Root-cause analysis and CAPA timelines (when included in the PDHP rather than a separate quality plan)
+- IRB / EC / regulatory reporting rules cross-referenced from this doc
 
-**Examples (illustrative):**
-- "Verify that every protocol deviation was entered into the deviation log within 5 business days of identification."
-- "Verify that every major deviation received a root-cause analysis before closure."
-- "Verify that critical deviations were reported to the Sponsor Medical Monitor within 24 hours of identification."
+**Examples (illustrative, not exhaustive):**
+- "Verify that every Protocol Deviation is captured in the named source-of-truth system per the PDHP."
+- "Verify that the PD term assigned to each deviation matches one of the approved standardized PD terms listed in the PDHP."
+- "Verify that the field value for the related-visit attribute follows the rule defined for between-visit deviations."
+- "Verify that every Minor PD was entered in the source system within the timeline specified for Minor PDs."
+- "Verify that every Major PD was entered in the source system within the timeline specified for Major PDs."
+- "Verify that the consultation with the named role occurred whenever a PD's classification was in doubt."
+- "Verify that the final classification of all PDs was completed before the named study milestone specified in the PDHP."
+- "Verify that site staff received the notification specified for Minor-to-Major reclassifications, from the notifier role named in the PDHP."
+- "Verify that site staff received the notification specified for Major-to-Minor reclassifications, from the notifier role named in the PDHP (which may differ from the Minor-to-Major notifier)."
+- "Verify that PDs classified as Major were reviewed by the role named in the PDHP for Major-PD review."
+- "Verify that PDs classified as Minor were reviewed by the role named in the PDHP for Minor-PD review."
+- "Verify that the first PD review occurred at the interval specified after the named milestone, and that subsequent reviews occurred at the specified cadence."
+- "Verify that for the country with override rules, PD reporting was performed by the role named in the PDHP for that country."
+- "Verify that the PD report file resides at the exact path specified in the PDHP and was not renamed or removed."
+- "Verify that the investigator oversight chain (extract / print / review / sign / date / file in ISF) was completed at the cadence specified in the PDHP."
+- "Verify that all PDs received final approval from the named role prior to the named milestone."
+- "Verify that PD-handling training for site staff is documented in the Site Initiation Visit report."
+- "Verify that PD-handling training for study team members is documented before their engagement in the study and before First Subject First Visit."
+
+**Pattern hints — PDHP-specific extraction guidance:**
+- **Two-tier severity timelines expand into multiple KRIs** — one per (classification × timeline unit). Working days and clock hours are distinct obligations.
+- **Bidirectional reclassification notifications expand into two KRIs.** Each direction often has a different notifier role; do not collapse into one rule.
+- **Two-tier reviewer responsibilities expand into multiple KRIs** — one per (classification × reviewer role).
+- **Country-specific reporting/oversight overrides** are common — extract per-country KRIs whenever the doc names a country with different rules from the default.
+- **System hygiene rules are easy to miss.** Single-actor button restrictions, file-path preservation, naming preservation, and backup-copy conventions are real obligations and become real KRIs.
+- **Multi-step chained obligations** (extract-print-review-sign-date-file) typically become one KRI verifying the full chain at the required cadence — but split into multiple KRIs if the doc imposes separate timing on individual steps.
+- **Training-documented-before-X is a recurring pattern.** Extract one KRI per (audience × event-trigger). Site staff at SIV is one KRI; study team before engagement is another; study team before FSFV is another (and may overlap with the engagement KRI — extract both, dedup downstream).
+- **Process prohibitions are KRIs too.** "No prospective waivers", "do not rename the report file", "no classification changes without notification" — each is a verifiable obligation.
 
 **What to ignore:**
-- Generic definitions of what a "protocol deviation" is (unless they impose a check)
-- Philosophical/regulatory-context statements
+- Generic definitions of what a "protocol deviation" is (unless the definition imposes a check)
+- Philosophical / regulatory-context statements that impose no site-level action
+- Pure organizational descriptions of teams unless they assign a monitorable PD-handling responsibility
 
 ---
 
