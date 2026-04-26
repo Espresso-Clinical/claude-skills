@@ -209,24 +209,33 @@ Because accompanying documents have no SoA/domain structure, the orphan scan is 
 
 ### Stage 5 — Deduplication (two sub-stages, run in order)
 
+Each sub-stage uses a **two-phase implementation**: a fast deterministic lexical pre-filter (verbatim-quote match OR jaccard ≥ 0.85), then a **semantic LLM pass (Gemini)** that catches dupes the lexical phase missed (different vocabulary, same obligation). Lexical-only dedup was found to miss the majority of real semantic dupes — the LLM phase is mandatory.
+
 **Stage 5a — Dedup against protocol golden set (runs FIRST).**
 
-For every candidate KRI produced through Stages 2-4, compute a match against every KRI in the protocol golden set. A match is declared if EITHER:
+For every candidate KRI:
 
-- Semantic equivalence score ≥ 0.85 on `rule_for_llm` AND both KRIs check the same obligation, OR
-- `supporting_quote` is verbatim-present in any protocol golden set KRI's `supporting_quote`.
+1. **Lexical pre-filter:** drop if `supporting_quote` is verbatim-present in any protocol KRI OR if jaccard on `rule_for_llm` ≥ 0.85.
+2. **Semantic LLM pass (Gemini):** for every survivor, send the full survivor list + the full protocol golden set to Gemini in one batch and ask it to flag any accompanying-doc KRI semantically equivalent to a protocol KRI. Drop matches.
 
-Matches are **dropped from this document's output** and logged to `protocol_dedup_report.json` with the matched protocol KRI's `kri_id`, the similarity score, and the matched field. This gives the user a full audit trail of what was removed and why.
+The LLM is instructed to be **conservative** — same TOPIC but different OBLIGATIONS is NOT a duplicate (e.g., storage temperature vs alarm settings).
+
+Both lexical and semantic drops are logged to `protocol_dedup_report.json` with the matched protocol KRI's `kri_id` and reason.
 
 **Stage 5b — Intra-document dedup (runs AFTER 5a).**
 
-Within the surviving candidate set for THIS document only, collapse semantic duplicates using the same two-pass detection (textual ∩ semantic). When a duplicate cluster is found, keep the KRI with:
+Within the surviving set for THIS document:
+
+1. **Lexical pre-cluster:** collapse obvious dupes (verbatim quote ∪ jaccard ≥ 0.7). Keep the KRI with the longest `rule_for_llm` + `supporting_quote` from each cluster.
+2. **Semantic LLM pass (Gemini):** the surviving set goes to Gemini in one batch; the LLM returns clusters of semantic duplicates. Drop everything except each cluster's `primary` (the most-specific KRI).
+
+When a duplicate cluster is found, the LLM is instructed to keep the KRI with:
 
 1. The most specific `rule_for_llm` (most concrete values/thresholds)
 2. The best `supporting_quote` (closest to verbatim rule text)
 3. The earliest page reference (tiebreaker)
 
-Merged duplicates are logged to `intra_dedup_report.json`.
+All decisions logged to `intra_dedup_report.json` (separate `lexical_merges` and `semantic_clusters` arrays).
 
 **No cross-accompanying-document dedup.** Each accompanying document is independent.
 
@@ -281,28 +290,55 @@ A 6-judge cross-model panel (3 Claude + 3 Gemini) reviews **every candidate** fl
 
 **Artifact:** `ndef_sweep_report.json` — for every evaluated KRI: the candidate flag, matched trigger phrase(s), per-judge votes with rationale, panel tally, final disposition, and (if user-resolved) the user decision.
 
-### Stage 7 — Final verification (correctness check, blocking gate)
+### Stage 7 — Final verification (split: deterministic + judgmental)
 
-A **5-judge cross-model panel (3 Claude + 2 Gemini)** independently reviews **EVERY** surviving KRI (both the main list and the `ndef_kris` list) against these 5 checks:
+Verification is split into two parts because LLM judges were empirically unreliable at strict verbatim checking — they default to PASS unless an error is glaring. **C2 is now enforced by code, not LLMs.**
 
-- **C1 — Reference accuracy.** The `document_reference` points to the actual section/page in the PDF. The page number exists. The section label matches the document's actual structure.
-- **C2 — Verbatim accuracy.** The `supporting_quote` appears verbatim on the cited page. Whitespace and punctuation normalization is allowed; word-level changes are not.
-- **C3 — Rule correctness.** The `rule_for_llm` is a deterministic, checkable instruction that accurately reflects the obligation described by the quote. Exception: KRIs in `ndef_kris` are only checked for the other criteria.
-- **C4 — Description fidelity.** The `description` accurately reflects what the KRI is monitoring and why it matters. No contradiction with the `rule_for_llm`.
-- **C5 — Schema/field compliance.** No outer quotes on `supporting_quote`; `combined_ref` uses em dash `—` and correctly concatenates the other two fields; `severity` ∈ {critical, major, minor}; `doc_type` matches the run's confirmed type; no duplicate page numbers; no trailing whitespace.
+**Stage 7-DET — C2 deterministic verbatim gate (`run.py verify-c2`).**
 
-**Verdicts per judge:** PASS / FAIL / FLAG (with one-sentence reason).
+For EVERY surviving KRI (main + NDEF):
 
-**Consensus adjudication:**
+1. Normalize the `supporting_quote` (NFKC, smart quotes → straight, em/en dashes → hyphen, all whitespace + punctuation stripped, lowercase).
+2. Substring-match the normalized quote against every page of the document (also normalized the same way). This tolerates docx-export PDFs that lose between-word spacing.
+3. **If not found anywhere → DROP** (logged in `verify_c2_report.json` with quote excerpt and cited reference).
+4. **If found but on a different page than cited → AUTO-FIX** the page number in `document_reference` and `combined_ref` (logged as a `page_fixes` entry).
+
+This is a **hard, code-enforced gate** — no LLM judgment, no rubber-stamping possible.
+
+**Stage 7-PANEL — C1, C3, C4, C5 LLM judging.**
+
+A **5-judge cross-model panel (3 Claude + 2 Gemini)** independently reviews each KRI on:
+
+- **C1 — Reference accuracy.** Section label matches the document's actual structure. (Page is already validated by C2-DET.)
+- **C3 — Rule correctness.** `rule_for_llm` is a deterministic, checkable instruction. Exempt for NDEF KRIs.
+- **C4 — Description fidelity.** `description` matches the obligation; no contradiction with the rule.
+- **C5 — Schema/field compliance.** No outer quotes on `supporting_quote`; `combined_ref` uses em dash; `severity` ∈ {critical, major, minor}; `doc_type` matches; no duplicate page numbers; no trailing whitespace.
+
+**Important — verdict-key normalization:** Gemini judges sometimes use `kri_id`, Claude judges may use `cluster_idx`. The orchestrator MUST normalize on a single key when aggregating, otherwise verdicts are silently dropped on the floor.
+
+**Consensus adjudication (C1/C3/C4/C5):**
 - 5/5 PASS → retained.
-- Any FAIL on C1/C2 (reference or verbatim) → the KRI is **dropped** from the output (logged with reason). Never auto-corrected — a wrong citation or fabricated quote means the KRI itself is unreliable.
-- FAIL on C5 (schema) → auto-corrected (normalize whitespace, strip outer quotes, fix em dash, etc.) and re-verified.
-- FAIL on C3/C4 → surfaced to the user as a FLAG for decision.
-- Any FLAG → surfaced to the user; user resolves (retain / drop / edit) before Stage 8.
+- ≥2 FAIL on C1 → drop (logged).
+- FAIL on C5 → auto-correct (normalize whitespace, strip outer quotes, fix em dash) and re-verify.
+- FAIL on C3/C4 → surface as FLAG for user decision.
 
-**Blocking gate:** Stage 8 (assemble) cannot begin until `verification_report.json` shows 100% PASS (after auto-corrections and user-resolved flags). This is a hard gate — the Compliance Monitor enforces it.
+**Blocking gate:** Stage 8 cannot begin until both `verify_c2_report.json` shows 0 unresolved drops AND the panel verdict file shows 100% PASS on C1/C3/C4/C5 after auto-corrections + user resolutions.
 
-**Artifact:** `verification_report.json` (per-KRI per-check per-judge verdicts).
+**Artifacts:** `verify_c2_report.json` (deterministic), `verification_report.json` (panel verdicts per KRI per check per judge).
+
+### Stage 7.5 — Minor-severity user review (`run.py minor-review`)
+
+After Stage 7 passes, the script lists every `severity: minor` KRI in `minor_review_prompt.json` and waits. The orchestrator (Claude) MUST surface this list to the user with each KRI's `kri_id`, `kri_name`, and `description`, then collect a keep/drop decision per KRI and write `minor_review_decisions.json`:
+
+```json
+{ "keep": ["IMP-027", "IMP-088"] }
+```
+
+Re-running `run.py minor-review` then applies those decisions: any minor KRI not in `keep` is dropped, output saved to `after_minor_review.json`.
+
+This eliminates the previous failure mode where administrative items survived all the way to the golden set without explicit user buy-in.
+
+**Artifacts:** `minor_review_prompt.json`, `minor_review_decisions.json` (user-supplied), `minor_review_report.json`.
 
 ### Stage 8 — Assemble
 
@@ -336,6 +372,45 @@ A **5-judge cross-model panel (3 Claude + 2 Gemini)** independently reviews **EV
 
 ## How to run
 
+### Plugin layout — where the files live
+
+This skill follows the standard espresso-skills plugin layout. The skill folder contains ONLY this `SKILL.md`. The supporting files live at the **plugin root**, one directory above:
+
+```
+~/.claude/plugins/cache/espresso-skills/accompanying-doc-kri-extractor/0.1.0/
+├── README.md
+├── references/
+│   ├── doc_type_briefs.md
+│   ├── extraction_rules.md
+│   └── verification_checks.md
+├── scripts/
+│   ├── run.py                 ← multi-subcommand orchestrator
+│   └── gemini_extract.py
+└── skills/
+    └── accompanying-doc-kri-extractor/
+        └── SKILL.md           ← (this file)
+```
+
+If you (Claude) are reading `SKILL.md` and don't immediately see `references/` or `scripts/` next to it — **do not** conclude the skill is incomplete. Look one level up at the plugin root. This mirrors `protocol-kri-extractor`'s layout exactly.
+
+### `run.py` is one file with multiple subcommands
+
+All deterministic stages are subcommands of `scripts/run.py`. There are NO separate `consensus_tier.py`, `dedup_vs_protocol.py`, `intra_dedup.py`, or `assemble.py` files — those are subcommands of `run.py`. The full subcommand list:
+
+| Subcommand | What it does |
+|---|---|
+| `python scripts/run.py setup --pdf ... --doc-type ... --protocol-golden-set ... --protocol-id ... --run-id ...` | Stage 1 — setup output dir + `run_config.json` |
+| `python scripts/run.py extract-text --output-dir <dir>` | Stage 2 prep — robust per-page text + loose-normalized index for verify-c2 |
+| `python scripts/run.py tier --output-dir <dir>` | Stage 3 mechanical tiering |
+| `python scripts/run.py dedup-protocol --output-dir <dir> --candidates <file>` | Stage 5a (lexical pre-filter + Gemini semantic pass) |
+| `python scripts/run.py dedup-intra --output-dir <dir>` | Stage 5b (lexical pre-cluster + Gemini semantic pass) |
+| `python scripts/run.py ndef --output-dir <dir>` | Stage 6 Pass 6.1 (regex pre-screen only) |
+| `python scripts/run.py verify-c2 --output-dir <dir> --input <after_ndef.json>` | Stage 7-DET — deterministic verbatim gate (drops fakes, auto-fixes wrong page numbers) |
+| `python scripts/run.py minor-review --output-dir <dir>` | Stage 7.5 — surface minor KRIs for user keep/drop decision (idempotent: re-run after writing decisions) |
+| `python scripts/run.py assemble --output-dir <dir>` | Stage 8 (reads from `after_minor_review.json` > `after_c2.json` > `after_ndef.json` in order of preference) |
+
+The Gemini extractions (Stage 2 Gemini half) use a separate script: `scripts/gemini_extract.py` — called five times in parallel.
+
 ### First time
 
 Ensure the Gemini secrets file from the protocol skill is available:
@@ -346,18 +421,9 @@ Ensure the Gemini secrets file from the protocol skill is available:
 
 This skill reuses that file for Gemini API access.
 
-### Canonical entry point
+### What Claude orchestrates vs. what run.py handles
 
-```bash
-python scripts/run.py \
-  --pdf <absolute-path-to-accompanying-doc.pdf> \
-  --doc-type <CMP|CSMP|IMP|PDHP|PV_PLAN|SAP|PD_CLASS> \
-  --protocol-golden-set <absolute-path-to-golden_set.json> \
-  --protocol-id <protocol_id> \
-  --run-id <run_id>
-```
-
-`run.py` performs the deterministic work (setup, Gemini extractions, dedup, NDEF, verification aggregation, assembly). The top-level Claude instance — following this SKILL.md — is responsible for the Agent-tool work: spawning the 5 Claude extraction sub-agents (Stage 2), the Tier 2 and Tier 3 judge panels (Stage 3), the orphan-scan panel (Stage 4), and the Stage 7 verification panel. SKILL.md is the orchestration contract; `run.py` is the deterministic helper.
+`run.py` performs the deterministic work (setup, dedup, NDEF Pass 6.1 candidate flagging, assembly). The top-level Claude instance — following this SKILL.md — is responsible for the Agent-tool work: spawning the 5 Claude extraction sub-agents (Stage 2), the Tier 2 and Tier 3 judge panels (Stage 3), the orphan-scan panel (Stage 4), the NDEF Pass 6.2 6-judge panel (Stage 6), and the Stage 7 verification panel. SKILL.md is the orchestration contract; `run.py` is the deterministic helper.
 
 ### Step-by-step execution contract for Claude
 
@@ -367,17 +433,19 @@ Claude, when this skill is invoked, you do the following in order:
 2. Run `python scripts/run.py setup ...` to create the output dir and `run_config.json`.
 3. **Launch 5 Claude extraction sub-agents in parallel** (Stage 2), giving each the full document text + extraction rules + doc-type brief. Save outputs to `raw_extractions/claude_{1..5}.json`.
 4. **Run `python scripts/gemini_extract.py` five times in parallel** (different seeds) to produce `raw_extractions/gemini_{1..5}.json`.
-5. **Run consensus tiering** via `python scripts/consensus_tier.py` — produces `consensus_report.json` with T1/T2/T3 classification.
+5. **Run consensus tiering** via `python scripts/run.py tier --output-dir <dir>` — produces `consensus_report.json` with T1/T2/T3 classification.
 6. **For T2:** launch a 6-judge auto-judgment panel (3 Claude Agents + 3 Gemini calls) on every T2 KRI. Save verdicts to `tier2_autojudgment_report.json`.
 7. **For T3:** launch the T3 promotion pipeline (coverage + verbatim + atomicity + panel + aggregate). Save to `tier3_promotion_report.json`.
 8. **Launch the orphan-scan panel** (2 Claude + 2 Gemini, page-by-page) and apply the promotion gates. Save to `orphan_scan_report.json`.
-9. **Run `python scripts/dedup_vs_protocol.py`** to drop KRIs already in the protocol golden set. Save to `protocol_dedup_report.json`.
-10. **Run `python scripts/intra_dedup.py`** for within-document dedup. Save to `intra_dedup_report.json`.
+9. **Run `python scripts/run.py dedup-protocol --output-dir <dir> --candidates <candidates.json>`** to drop KRIs already in the protocol golden set. Save to `protocol_dedup_report.json` and `after_protocol_dedup.json`.
+10. **Run `python scripts/run.py dedup-intra --output-dir <dir>`** for within-document dedup. Save to `intra_dedup_report.json` and `after_intra_dedup.json`.
 11. **Stage 6 NDEF — Pass 6.1:** Run `python scripts/run.py ndef` to produce the regex candidate set. Output: `ndef_sweep_report.json` (Pass 6.1 entry) + `after_ndef.json` with each KRI carrying `ndef_candidate` and `ndef_trigger_phrases`.
 11a. **Stage 6 NDEF — Pass 6.2:** Launch a 6-judge cross-model panel (3 Claude + 3 Gemini) on every Pass 6.1 candidate AND a 10% random sample of non-candidates. Each judge votes NON_DEFINABLE / DEFINABLE / BORDERLINE. Apply the voting tiers (5–6 → auto-NDEF; 3–4 → surface to user; 0–2 → keep in main). For confirmed NDEF KRIs, **rewrite `rule_for_llm`** as `"NDEF — Non-verifiable: <reason from panel consensus>"` and set `ndef = true`. Append the panel record to `ndef_sweep_report.json`.
-12. **Launch the Stage 7 verification panel** (5 judges). Save to `verification_report.json`. **Blocking gate: 100% PASS before continuing.**
-13. **Run `python scripts/assemble.py`** to produce `accompanying_golden_set.json` and `Accompanying_KRIs.xlsx`.
-14. Report back to the user with counts, location, and any surfaced flags.
+12. **Run `python scripts/run.py verify-c2 --output-dir <dir> --input after_ndef.json`** — DETERMINISTIC verbatim gate. Drops any KRI whose `supporting_quote` is not in the document; auto-fixes wrong page numbers. **Hard gate; no LLM judging on C2.** Output: `verify_c2_report.json` + `after_c2.json`.
+12a. **Launch the Stage 7-PANEL** (5 judges, C1+C3+C4+C5 only — NOT C2). Save to `verification_report.json`. When aggregating, normalize verdict keys (Gemini stores `kri_id`, Claude may store `cluster_idx`) — drop nothing on a key mismatch. Apply consensus tiers; surface FLAGs to the user.
+13. **Run `python scripts/run.py minor-review --output-dir <dir>`** — surfaces minor-severity KRIs in `minor_review_prompt.json`. Present them to the user, collect keep/drop decisions, write `minor_review_decisions.json` with shape `{"keep": ["IMP-XYZ", ...]}`, then RE-RUN this command to apply.
+14. **Run `python scripts/run.py assemble --output-dir <dir>`** to produce `accompanying_golden_set.json` and `Accompanying_KRIs.xlsx`. The script auto-prefers `after_minor_review.json` > `after_c2.json` > `after_ndef.json`.
+15. Report back to the user with counts, location, and any surfaced flags.
 
 ---
 
