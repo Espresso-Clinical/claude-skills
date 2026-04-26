@@ -336,6 +336,42 @@ A **5-judge cross-model panel (3 Claude + 2 Gemini)** independently reviews **EV
 
 ## How to run
 
+### Plugin layout — where the files live
+
+This skill follows the standard espresso-skills plugin layout. The skill folder contains ONLY this `SKILL.md`. The supporting files live at the **plugin root**, one directory above:
+
+```
+~/.claude/plugins/cache/espresso-skills/accompanying-doc-kri-extractor/0.1.0/
+├── README.md
+├── references/
+│   ├── doc_type_briefs.md
+│   ├── extraction_rules.md
+│   └── verification_checks.md
+├── scripts/
+│   ├── run.py                 ← multi-subcommand orchestrator
+│   └── gemini_extract.py
+└── skills/
+    └── accompanying-doc-kri-extractor/
+        └── SKILL.md           ← (this file)
+```
+
+If you (Claude) are reading `SKILL.md` and don't immediately see `references/` or `scripts/` next to it — **do not** conclude the skill is incomplete. Look one level up at the plugin root. This mirrors `protocol-kri-extractor`'s layout exactly.
+
+### `run.py` is one file with multiple subcommands
+
+All deterministic stages are subcommands of `scripts/run.py`. There are NO separate `consensus_tier.py`, `dedup_vs_protocol.py`, `intra_dedup.py`, or `assemble.py` files — those are subcommands of `run.py`. The full subcommand list:
+
+| Subcommand | What it does |
+|---|---|
+| `python scripts/run.py setup --pdf ... --doc-type ... --protocol-golden-set ... --protocol-id ... --run-id ...` | Stage 1 — setup output dir + `run_config.json` |
+| `python scripts/run.py tier --output-dir <dir>` | Stage 3 mechanical tiering |
+| `python scripts/run.py dedup-protocol --output-dir <dir> --candidates <file>` | Stage 5a |
+| `python scripts/run.py dedup-intra --output-dir <dir>` | Stage 5b |
+| `python scripts/run.py ndef --output-dir <dir>` | Stage 6 Pass 6.1 (regex pre-screen only) |
+| `python scripts/run.py assemble --output-dir <dir>` | Stage 8 |
+
+The Gemini extractions (Stage 2 Gemini half) use a separate script: `scripts/gemini_extract.py` — called five times in parallel.
+
 ### First time
 
 Ensure the Gemini secrets file from the protocol skill is available:
@@ -346,18 +382,9 @@ Ensure the Gemini secrets file from the protocol skill is available:
 
 This skill reuses that file for Gemini API access.
 
-### Canonical entry point
+### What Claude orchestrates vs. what run.py handles
 
-```bash
-python scripts/run.py \
-  --pdf <absolute-path-to-accompanying-doc.pdf> \
-  --doc-type <CMP|CSMP|IMP|PDHP|PV_PLAN|SAP|PD_CLASS> \
-  --protocol-golden-set <absolute-path-to-golden_set.json> \
-  --protocol-id <protocol_id> \
-  --run-id <run_id>
-```
-
-`run.py` performs the deterministic work (setup, Gemini extractions, dedup, NDEF, verification aggregation, assembly). The top-level Claude instance — following this SKILL.md — is responsible for the Agent-tool work: spawning the 5 Claude extraction sub-agents (Stage 2), the Tier 2 and Tier 3 judge panels (Stage 3), the orphan-scan panel (Stage 4), and the Stage 7 verification panel. SKILL.md is the orchestration contract; `run.py` is the deterministic helper.
+`run.py` performs the deterministic work (setup, dedup, NDEF Pass 6.1 candidate flagging, assembly). The top-level Claude instance — following this SKILL.md — is responsible for the Agent-tool work: spawning the 5 Claude extraction sub-agents (Stage 2), the Tier 2 and Tier 3 judge panels (Stage 3), the orphan-scan panel (Stage 4), the NDEF Pass 6.2 6-judge panel (Stage 6), and the Stage 7 verification panel. SKILL.md is the orchestration contract; `run.py` is the deterministic helper.
 
 ### Step-by-step execution contract for Claude
 
@@ -367,16 +394,16 @@ Claude, when this skill is invoked, you do the following in order:
 2. Run `python scripts/run.py setup ...` to create the output dir and `run_config.json`.
 3. **Launch 5 Claude extraction sub-agents in parallel** (Stage 2), giving each the full document text + extraction rules + doc-type brief. Save outputs to `raw_extractions/claude_{1..5}.json`.
 4. **Run `python scripts/gemini_extract.py` five times in parallel** (different seeds) to produce `raw_extractions/gemini_{1..5}.json`.
-5. **Run consensus tiering** via `python scripts/consensus_tier.py` — produces `consensus_report.json` with T1/T2/T3 classification.
+5. **Run consensus tiering** via `python scripts/run.py tier --output-dir <dir>` — produces `consensus_report.json` with T1/T2/T3 classification.
 6. **For T2:** launch a 6-judge auto-judgment panel (3 Claude Agents + 3 Gemini calls) on every T2 KRI. Save verdicts to `tier2_autojudgment_report.json`.
 7. **For T3:** launch the T3 promotion pipeline (coverage + verbatim + atomicity + panel + aggregate). Save to `tier3_promotion_report.json`.
 8. **Launch the orphan-scan panel** (2 Claude + 2 Gemini, page-by-page) and apply the promotion gates. Save to `orphan_scan_report.json`.
-9. **Run `python scripts/dedup_vs_protocol.py`** to drop KRIs already in the protocol golden set. Save to `protocol_dedup_report.json`.
-10. **Run `python scripts/intra_dedup.py`** for within-document dedup. Save to `intra_dedup_report.json`.
+9. **Run `python scripts/run.py dedup-protocol --output-dir <dir> --candidates <candidates.json>`** to drop KRIs already in the protocol golden set. Save to `protocol_dedup_report.json` and `after_protocol_dedup.json`.
+10. **Run `python scripts/run.py dedup-intra --output-dir <dir>`** for within-document dedup. Save to `intra_dedup_report.json` and `after_intra_dedup.json`.
 11. **Stage 6 NDEF — Pass 6.1:** Run `python scripts/run.py ndef` to produce the regex candidate set. Output: `ndef_sweep_report.json` (Pass 6.1 entry) + `after_ndef.json` with each KRI carrying `ndef_candidate` and `ndef_trigger_phrases`.
 11a. **Stage 6 NDEF — Pass 6.2:** Launch a 6-judge cross-model panel (3 Claude + 3 Gemini) on every Pass 6.1 candidate AND a 10% random sample of non-candidates. Each judge votes NON_DEFINABLE / DEFINABLE / BORDERLINE. Apply the voting tiers (5–6 → auto-NDEF; 3–4 → surface to user; 0–2 → keep in main). For confirmed NDEF KRIs, **rewrite `rule_for_llm`** as `"NDEF — Non-verifiable: <reason from panel consensus>"` and set `ndef = true`. Append the panel record to `ndef_sweep_report.json`.
 12. **Launch the Stage 7 verification panel** (5 judges). Save to `verification_report.json`. **Blocking gate: 100% PASS before continuing.**
-13. **Run `python scripts/assemble.py`** to produce `accompanying_golden_set.json` and `Accompanying_KRIs.xlsx`.
+13. **Run `python scripts/run.py assemble --output-dir <dir>`** to produce `accompanying_golden_set.json` and `Accompanying_KRIs.xlsx`.
 14. Report back to the user with counts, location, and any surfaced flags.
 
 ---
