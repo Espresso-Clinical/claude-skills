@@ -186,29 +186,75 @@ Universal extraction targets (apply to every doc type):
 
 ## PV_PLAN — Pharmacovigilance Plan
 
-**What it is.** Defines how adverse events, serious adverse events, SUSARs, and safety signals are captured, reviewed, coded, reported, and reconciled. Covers SAE timelines, MedDRA coding rules, expedited reporting, DSUR/PSUR obligations, reconciliation with clinical database.
+**What it is.** Defines how adverse events, serious adverse events, SUSARs/SARs, pregnancies, and safety signals are captured, classified, reviewed, coded, reported, distributed, reconciled, and archived. Covers a multi-tier timeline matrix (event severity × jurisdiction × reporting phase), multi-party review chains, blinding integrity throughout the safety workflow, central unblinding rules, technical/system standards, reconciliation activities, pregnancy module, cross-trial sharing between unblinded teams, country-specific overrides, edge-case workflows, end-of-trial data transfer, and authorship/access restrictions.
 
 **Key KRI categories:**
-- SAE reporting timelines (site → sponsor, sponsor → regulatory) by seriousness/expectedness
-- SUSAR expedited reporting windows (7-day for fatal/life-threatening, 15-day otherwise — confirm against doc)
-- MedDRA coding / medical review cadence
-- Reconciliation rules between clinical and safety databases (frequency, tolerance)
-- Follow-up requirements for ongoing SAEs
-- Line-listing and aggregate reporting cadence
-- Signal detection process and thresholds
-- DSUR / PSUR preparation windows
-- Safety Committee cadence
-- IRB / EC / regulatory reporting rules
+- PV Plan ownership — required signers/approvers and update triggers (e.g., update when new information available; minimum signature roster)
+- Day 0 / clock-start definition — explicit verifiable rule for when a reporting clock begins (typically: first awareness by a defined party AND minimum criteria met)
+- Initial site reporting — Investigator → safety responsible window, by event type and severity
+- Multi-tier timeline matrix — distinct timelines per (event severity × jurisdiction × reporting phase: initial / draft / review / finalize / final report / follow-up). Each cell of the matrix is its own KRI. Examples of cells: unrelated-SAE draft to reviewers; potential-SUSAR draft (typically expedited); SAR draft; SUSAR/SAR evaluation by safety responsible; fatal/life-threatening finalize; standard-expedited finalize; final CIOMS readiness; follow-up information completion window
+- Multi-party review chains — draft expedited report to Reviewer 1 (medical advisor) within window X AND Reviewer 2 (sponsor safety responsible) within window Y. Each reviewer × window is its own KRI.
+- Country-specific timeline overrides — when a jurisdiction has stricter timelines than the default global rule, extract a separate per-country KRI for each affected event type
+- Working-day vs calendar-day distinctions — when the doc names them, extract the unit faithfully (a "5 working days" rule is not the same as "5 calendar days")
+- Weekend / holiday adjustment rules for cross-trial or cross-jurisdiction reporting
+- SAE report minimum content — the doc usually lists the minimum fields required for an initial report (site/subject info, event term, causality, etc.); extract one KRI verifying the minimum content is present
+- Causality and expectedness — Investigator's initial causality assessment must be present from first report; expectedness assessed by named role using a named reference document (e.g., current Investigator's Brochure)
+- Causality downgrade prohibition — one-way constraint that a named role may not downgrade an Investigator's "related" classification
+- Technical / system standards — Safety Database structure (e.g., E2B-R3 or equivalent), sequential SAE numbering convention starting at a defined index, eCRF SAE-page entry with explicit "Serious" mark, blinded vs unblinded report formats
+- Blinding integrity in PV reporting (multi-KRI cluster):
+  - Blinded re-submission of any report containing unblinding or personal information; deletion/blinding of original
+  - Central unblinding restricted to a designated role (e.g., PVR) via a defined channel (e.g., eCRF)
+  - Unblinding notifications to other roles must NOT reveal treatment allocation
+  - Blinded version of finalized expedited reports for distribution
+  - Stand-alone filing location for unblinded safety information with restricted access
+  - Operational study staff barred from unblinded safety information
+  - PI emergency unblinding notification to PVR/safety responsible without revealing the result
+  - Unblinded subject tracking ledger (overview document of subjects unblinded + persons informed)
+- Reconciliation activities — periodic SAE reconciliation; minimum field list for reconciliation (subject ID, event term, onset/stop, outcome, severity, seriousness, causality, IMP admin date — confirm the doc's actual list); pregnancy reconciliation across eCRF + dedicated form; un-finalised SAE follow-up queries
+- Discrepancy query workflow — queries to Investigator with CRA copied; resolution responsibility
+- Pregnancy module — notification timeline (regardless of whether an AE occurred); postpartum follow-up duration; submission channel; reconciliation
+- Cross-trial / cross-program expedited sharing — expedited reports shared between unblinded teams across studies involving the same IMP; tiered timelines by severity; weekend/holiday adjustment; single-platform-submission rule (the originating party submits to the regulatory platform; the other does not, to avoid duplicates)
+- Investigator Notification (IN) — generation responsibility, distribution path to all sites
+- Significant safety findings — sponsor-to-CRO (or vice versa) notification window for newly identified safety findings
+- DSUR / PSUR — authoring responsibility; submission responsibility per country; data transfer timeline from CRO to Sponsor (e.g., listings within X after cut-off); annual cadence
+- Edge-case workflows — fax fallback during connectivity outage (with confirmation retention + email-on-restoration); follow-up email when an eCRF safety update does not warrant a full follow-up report
+- Authorship restrictions — Unblinded Case Narratives for the CSR written exclusively by a named role (e.g., PVR)
+- Filing access restrictions — electronic stand-alone filing for unblinded safety data with named role restriction
+- End-of-trial Safety Database transfer — file format, transport mechanism, audit trail format, recipient
+- Safety Committee / DSMB cadence (when referenced in PV Plan)
+- IRB / EC / regulatory reporting rules cross-referenced from this doc
 
-**Examples (illustrative):**
-- "Verify that every SAE was reported from site to sponsor within 24 hours of site awareness."
-- "Verify that every SUSAR met regulatory expedited-reporting requirements (7-day fatal/life-threatening; 15-day otherwise)."
-- "Verify that safety-database / clinical-database reconciliation was performed at least quarterly."
-- "Verify that every SAE narrative was medically reviewed before locking the case."
+**Examples (illustrative, not exhaustive):**
+- "Verify that the Pharmacovigilance Plan bears signatures from all required signers per the plan."
+- "Verify that the Day 0 clock-start for an SAE is documented as the date the first qualifying party received the report and minimum criteria were met."
+- "Verify that the Investigator reported the SAE to the named safety responsible within the timeline specified in the PV Plan."
+- "Verify that the draft expedited report for a potential SUSAR was sent to the medical reviewer within the timeline specified for that event tier."
+- "Verify that the draft expedited report was reviewed by the sponsor safety responsible within the timeline specified for that event tier."
+- "Verify that the final expedited report was ready for regulatory submission by the deadline specified for its severity tier."
+- "Verify that any expedited reporting deadline falling on a weekend or holiday was met by the last working day prior to the deadline."
+- "Verify that any SAE report containing unblinding or personal information was re-submitted in blinded form and the original was deleted or blinded."
+- "Verify that central unblinding was performed exclusively by the designated role through the channel specified in the PV Plan."
+- "Verify that notifications of central unblinding to non-PVR roles did not reveal the treatment allocation."
+- "Verify that the Investigator's Brochure used for expectedness assessment was the version current at the time of the suspected reaction."
+- "Verify that the periodic SAE reconciliation report compared all minimum key safety fields listed in the PV Plan."
+- "Verify that the Pregnancy Notification Form was completed and sent within the timeline specified, regardless of whether an AE occurred."
+- "Verify that the end-of-trial Safety Database transfer was delivered in the format and through the transport mechanism specified in the PV Plan."
+
+**Pattern hints — PV-Plan-specific extraction guidance:**
+- The PV Plan typically encodes a **timeline matrix** of (event severity × jurisdiction × reporting phase). Treat each cell as a separate KRI even when the source doc states multiple cells in one paragraph or table row.
+- **Multi-party review chains expand into multiple KRIs** — one per reviewer, each with its own deadline.
+- **Blinding rules in PV are scattered.** Search the entire document for "blind", "unblind", "treatment allocation", "stand-alone", "access" — relevant rules appear in handling, distribution, filing, narratives, and end-of-trial sections, not in a single "Blinding" section.
+- **Country-specific timelines override global timelines.** Whenever a jurisdiction has stricter rules than the default, extract a separate per-country KRI rather than burying the override.
+- **Working-day vs calendar-day matters.** A "5 working days" rule is materially different from "5 calendar days". Preserve the unit faithfully in `rule_for_llm` and `supporting_quote`.
+- **Weekend/holiday adjustment is its own KRI** — separate from the base timeline rule.
+- **Reconciliation field lists** become a single KRI verifying the reconciliation covers all listed fields, not one KRI per field — unless a specific field has its own discrete obligation (e.g., "causality must be present from initial report" stands alone).
+- **Cross-trial sharing rules** typically include a single-platform-submission-by-originator rule. Extract that rule explicitly — it prevents duplicate regulatory submissions.
 
 **What to ignore:**
-- Generic pharmacovigilance terminology definitions
+- Generic pharmacovigilance terminology definitions (unless the definition imposes an obligation)
 - Regulatory-framework history sections
+- Background on ICH / GVP / E2B standards (extract only when they convert into a specific site or sponsor action)
+- Pure organizational descriptions of teams unless they assign a monitorable responsibility
 
 ---
 
