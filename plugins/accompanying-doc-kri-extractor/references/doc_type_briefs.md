@@ -75,31 +75,56 @@ Universal extraction targets (apply to every doc type):
 
 ## IMP — IMP Handling Manual
 
-**What it is.** Defines how the Investigational Medicinal Product is received, stored, dispensed, prepared, administered, returned, and destroyed. Covers temperature storage, accountability, shipment handling, retest dates, expiry, returns, destruction, excursion handling.
+**What it is.** Defines how the Investigational Medicinal Product is received, stored, prepared, administered, returned, and destroyed. Covers shipment receipt, temperature storage and excursions, accountability, expiry/retest, dose preparation, equipment handling (water baths, thermometers, alarms), visual integrity inspection, blinding logistics during preparation and injection, sponsor release gates, complaint/escalation, and dispense/disposal documentation.
 
 **Key KRI categories:**
-- Storage temperature ranges (°C thresholds, exception handling)
-- Temperature excursion reporting windows and thresholds
-- Shipment receipt checks (temperature log review, quantity reconciliation, integrity checks)
-- Accountability reconciliation rules (dispensed vs returned, tolerance thresholds)
-- Expiry / retest date tracking
-- Dose preparation rules (diluent, timing, light exposure, stability windows)
-- Dispensing documentation requirements
-- Returned / unused IMP handling
-- Destruction documentation requirements
-- Blinding integrity rules (for blinded studies)
+- Storage temperature ranges and freezer alarm thresholds (°C limits, alarm bounds)
+- Temperature excursion detection, reporting windows, and quarantine handling
+- Shipment receipt workflow (timestamp of receipt, timestamp of opening, ID matching, data-logger handling, EDC upload of forms)
+- Sponsor release gate (quarantine until sponsor verifies temperature compliance and releases for clinical use)
+- Accountability reconciliation (received vs dispensed vs returned vs disposed, with documentation)
+- Expiry / retest date verification at each use, including selection rules (e.g., earliest expiry first)
+- Dose preparation steps (selection, tagging, thawing, mixing, aspiration volume, port handling)
+- Equipment specifics — water bath (target temp ±tolerance, thermometer placement, stabilization wait, cleaning), freezer thermometer calibration, alarm system calibration
+- Stability windows — split into separate KRIs per window (total at room temperature, post-aspiration in syringe, dry-ice shipper time limit)
+- Timestamp capture obligations — every handoff in the IMP lifecycle is its own timestamp KRI (receipt, opening, removal from storage, thawing start, thawing end, aspiration, administration interruptions)
+- Dual-verification chains — kit ID vs shipment form, Dispense PDF vs label vs patient number, performed at multiple stages
+- Visual integrity inspection — bag/cassette damage (cracks, tears, holes, seals), post-thaw inspection, cell clumps/aggregates immediately before injection
+- Disinfection procedures — port wipe, injection-site swab (alcohol concentration, dwell time, dry time)
+- Manual labeling and tagging — site-completed primary labels (subject + visit number with permanent marker), patient-number kit tags
+- Blinding integrity in preparation — separate preparation area, delegated unblinded preparer, syringe masking when injector is blinded
+- Blinding integrity in administration — blinded staff exclusion during injection, patient view screen, injector role separation from baseline/follow-up assessments
 - Emergency unblinding procedures and timelines
+- Document/PDF lifecycle — EDC uploads (shipment form PDF, data-logger output PDF, dispense PDF), patient binder filing, ISF monthly temperature printout
+- Anesthesia and injection-site restrictions (e.g., prohibited routes/sites, needle replacement immediately before injection)
+- Returned / unused IMP handling, disposal documentation, retention of empty packaging for CRA accountability
+- Destruction documentation requirements
+- Damaged-IMP and complaint workflow — halt-and-quarantine, complaint form path, sponsor notification
 
-**Examples (illustrative):**
-- "Verify that any temperature excursion outside the storage range was reported to the sponsor within 24 hours of detection."
-- "Verify that site accountability logs reconcile received - dispensed - returned with zero unexplained variance."
-- "Verify that no IMP was dispensed after its expiry or retest date."
-- "Verify that reconstituted drug was administered within the specified in-use stability window (per dilution instructions)."
+**Examples (illustrative, not exhaustive):**
+- "Verify that the time of IMP shipment receipt was documented on the shipment form."
+- "Verify that the temperature data-logger reading was downloaded and reviewed before the IMP was released for clinical use."
+- "Verify that the sponsor confirmed shipment temperature was within the specified storage range before releasing the IMP from quarantine."
+- "Verify that the IMP unit selected for the subject had the earliest expiry date among available units."
+- "Verify that the kit ID on the dispense record matches the kit ID on the unit label and the assigned subject number."
+- "Verify that the IMP was administered within the specified total room-temperature stability window from the end of thawing to completion of injection."
+- "Verify that the IMP was administered within the specified post-aspiration stability window from syringe fill to completion of injection."
+- "Verify that the syringe was masked before reaching a blinded injector when the study is blinded."
+- "Verify that any defect or damage identified during IMP integrity inspection was reported via the sponsor's complaint form and the unit was quarantined."
+- "Verify that the freezer alarm system was set to the temperature limits specified in the IMP Manual."
+
+**Pattern hints — IMP-specific extraction guidance:**
+- **Timestamp obligations are a pattern, not a single rule.** Every handoff in the IMP lifecycle (receipt, opening, removal, thaw start, thaw end, aspiration, administration) typically has its own timestamp-capture rule. Scan for them all and emit one KRI per handoff.
+- **Dual-verification chains are common.** When the doc says "verify X matches Y," extract one KRI per verification step — even if multiple verifications appear in one paragraph.
+- **Blinding rules are scattered, not centralized.** Search the entire document for "blind", "unblinded", "masked", "delegated" — relevant rules appear in preparation, administration, and access-control sections. Don't expect one "Blinding" section.
+- **Equipment rules become multiple KRIs.** A single piece of equipment (water bath, thermometer, alarm) typically generates several KRIs: target setting, calibration, placement/use procedure, cleaning/maintenance.
+- **Stability windows must be split.** Total room-temperature stability and post-aspiration stability are distinct KRIs even if mentioned in one sentence.
 
 **What to ignore:**
-- Generic pharmacology information
-- Full chemical structure descriptions
-- Manufacturer address/contact info
+- Generic pharmacology / mechanism-of-action background
+- Full chemical structure or formulation chemistry
+- Manufacturer address / contact info (unless it's an escalation target embedded in a rule)
+- Regulatory framework boilerplate that imposes no site-level action
 
 ---
 

@@ -70,6 +70,8 @@ Assign one of `critical`, `major`, `minor`:
 
 When ambiguous, prefer the higher severity.
 
+**Source-document criticality is unreliable.** Many accompanying documents have a criticality column or annotation that is left blank, partially filled, or inconsistent across rules. **Never inherit a null or blank source-document criticality into the KRI's `severity` field.** Always assign `severity` per the rubric above based on the rule's content (patient-safety / endpoint integrity / regulatory exposure). If the source document explicitly assigns a criticality and it conflicts with the rubric, prefer the rubric — but log the source assignment in `description` for the human reviewer.
+
 ## 10. Source page fidelity
 
 - Never cite a page the quote does not appear on. If the quote spans two pages, pick the page where the rule's threshold/action verb sits.
