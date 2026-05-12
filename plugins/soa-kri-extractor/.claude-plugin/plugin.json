@@ -1,0 +1,11 @@
+{
+  "name": "soa-kri-extractor",
+  "version": "1.0.0",
+  "description": "Extracts SOA (Schedule of Activities) KRIs from clinical trial protocol PDFs — covers both the structured SoA table and narrative cross-visit / methodology / long-term-tracking rules",
+  "author": {
+    "name": "Espresso Clinical",
+    "email": "eng@espressoclinical.com"
+  },
+  "license": "UNLICENSED",
+  "keywords": ["clinical", "espresso", "protocol", "soa", "schedule-of-activities", "kri", "extraction", "cra"]
+}
