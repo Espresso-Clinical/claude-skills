@@ -24,23 +24,23 @@ Usage — legacy registry (the 3 internal test protocols):
   python run.py LCZ696G2301 --from 2
 
 Step order (from SKILL.md Phase 1 → Phase 4):
-  1a         Manifest
-  1b-camelot Camelot SoA table extraction (PRIMARY)
-  1b         SoA ontology build
-  1c         Deterministic footnote mapper (subprocess — needs --table-pages/--fn-pages)
+  1a         Manifest (ELIG/SAF/END/OPS sections only — SOA out of scope)
   2          KRI extraction (per domain, multi-model panel)
+  2.6        Auto-judgment for T2 + T3-promoted KRIs (6-judge neutral panel)
   3.5        Protocol-wide orphan scan                     [BLOCKING]
-  3a         Completeness check
-  3a+        Clinical heuristics (H1-H10, inside 3a script)
+  3a         Completeness check (obligation-inventory based) + H4 SAF heuristic
   3b         Full KRI accuracy judging (100%, 5-judge panel) [BLOCKING]
   3c         Consistency check
   3d         Full verbatim pdfplumber verification            [BLOCKING]
-  2.6        Auto-judgment for T2 + T3-promoted KRIs (6-judge neutral panel)
   4a         Assembly + Excel
   4a-dedup   Cross-domain + intra-domain de-duplication
-  4a-ndef    Post-extraction NDEF sweep (moves non-definable KRIs into NDEF)
   4a-flagged End-of-run cross-domain flagged-review table (user review)
   4b         Golden set comparison (optional)
+
+Scope note: SOA-domain extraction is handled by the separate `soa-kri-extractor`
+skill. This pipeline extracts only ELIG, SAF, END, OPS. SOA-flavored rules
+("procedure happened at visit", visit windows, SoA-table content, SoA footnotes)
+must be skipped by every extractor and the orphan scan.
 """
 
 import sys
@@ -79,20 +79,16 @@ LEGACY_PROTOCOLS = {
 # ─── Step catalog ───────────────────────────────────────────────────────────
 # Canonical order. Each entry: (step_id, description, is_blocking)
 STEP_CATALOG = [
-    ("1a",          "Manifest — cover pages + TOC → section map",                 False),
-    ("1b-camelot",  "Camelot SoA table extraction (PRIMARY)",                     False),
-    ("1b",          "SoA ontology build",                                         False),
-    ("1c",          "Deterministic footnote mapper (Step 1C)",                    False),
-    ("2",           "KRI extraction (per-domain, multi-model panel)",             False),
+    ("1a",          "Manifest — cover pages + TOC → section map (ELIG/SAF/END/OPS)", False),
+    ("2",           "KRI extraction (per-domain, multi-model panel; ELIG/SAF/END/OPS)", False),
     ("2.6",         "Auto-judgment for T2 + T3-promoted KRIs (6-judge panel)",    False),
     ("3.5",         "Protocol-wide orphan scan (3 Claude + 3 Gemini)",            True),
-    ("3a",          "Completeness + clinical heuristics H1–H10",                  False),
-    ("3b",          "Full KRI accuracy judging (100%, 5-judge panel)",            True),
+    ("3a",          "Completeness (obligation-inventory based) + H4 SAF heuristic", False),
+    ("3b",          "Full KRI accuracy judging (100%, 5-judge panel, 6 checks C1–C6)", True),
     ("3c",          "Consistency check",                                          False),
     ("3d",          "Full verbatim pdfplumber verification",                      True),
     ("4a",          "Assembly (extracted_kris.json + Excel)",                     False),
     ("4a-dedup",    "Cross-domain + intra-domain dedup",                          False),
-    ("4a-ndef",     "Post-extraction NDEF sweep (6-judge panel)",                 False),
     ("4a-flagged",  "End-of-run flagged-review table (cross-domain consolidate)", False),
     ("4b",          "Golden set comparison (optional)",                           False),
 ]
@@ -139,79 +135,12 @@ def run_step_1a(pdf, out_dir, **kw):
     return True
 
 
-def run_step_1b_camelot(pdf, out_dir, **kw):
-    try:
-        from camelot_table_extractor import run_extraction as camelot_run
-    except Exception as e:
-        print(f"  ⚠ Step 1B-Camelot: import failed — {e}. Skipping (non-blocking).")
-        return True
-    print(f"\n[ Step 1B-Camelot — {STEP_DESC['1b-camelot']} ]")
-    try:
-        camelot_run(pdf, out_dir)
-    except Exception as e:
-        print(f"  ⚠ Camelot extraction errored — {e}. Continuing without SoA table.")
-    return True
-
-
-def run_step_1b_ontology(pdf, out_dir, **kw):
-    from step1b_ontology import build_ontology, print_summary
-    print(f"\n[ Step 1B — {STEP_DESC['1b']} ]")
-    manifest_path = os.path.join(out_dir, "manifest.json")
-    with open(manifest_path) as f:
-        manifest = json.load(f)
-    ontology = build_ontology(pdf, manifest)
-    ontology_path = os.path.join(out_dir, "ontology.json")
-    with open(ontology_path, "w") as f:
-        json.dump(ontology, f, indent=2, ensure_ascii=False)
-    print_summary(ontology)
-    print(f"  ✓ Saved {ontology_path}")
-    return True
-
-
-def run_step_1c(pdf, out_dir, **kw):
-    print(f"\n[ Step 1C — {STEP_DESC['1c']} ]")
-    # Derive SoA table pages and footnote pages from soa_table.json if available
-    soa_json = os.path.join(out_dir, "soa_table.json")
-    if not os.path.exists(soa_json):
-        print("  ⚠ soa_table.json missing — run Step 1B-Camelot first. Skipping 1C.")
-        return True
-    try:
-        with open(soa_json) as f:
-            soa_data = json.load(f)
-        table_pages = sorted(set(soa_data.get("pages", []) or []))
-        # Footnote pages — typical protocol puts them on the pages following the table.
-        # Conservative default: same pages as table + next 5 pages.
-        if not table_pages:
-            print("  ⚠ soa_table.json has no pages field — skipping 1C.")
-            return True
-        fn_start = table_pages[-1]
-        fn_end = fn_start + 5
-        cmd = [
-            sys.executable,
-            os.path.join(SCRIPTS_DIR, "footnote_mapper.py"),
-            "--pdf", pdf,
-            "--table-pages", ",".join(str(p) for p in table_pages),
-            "--fn-pages", f"{fn_start}-{fn_end}",
-            "--out", out_dir,
-        ]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            print(f"  ⚠ footnote_mapper exited {result.returncode} — continuing without 1C.")
-            print(f"    stderr: {result.stderr[-500:]}")
-        else:
-            print(result.stdout.strip()[-800:])
-    except Exception as e:
-        print(f"  ⚠ Step 1C errored — {e}. Continuing without footnote map.")
-    return True
-
-
 def run_step_2(pdf, out_dir, **kw):
     from step2_extract import run_extraction
     print(f"\n[ Step 2 — {STEP_DESC['2']} ]")
     manifest_path = os.path.join(out_dir, "manifest.json")
-    ontology_path = os.path.join(out_dir, "ontology.json")
     cats = kw.get("categories")
-    run_extraction(pdf, manifest_path, ontology_path, out_dir, cats)
+    run_extraction(pdf, manifest_path, out_dir, cats)
     return True
 
 
@@ -228,10 +157,9 @@ def run_step_3_5(pdf, out_dir, **kw):
 
 def run_step_3a(pdf, out_dir, **kw):
     from step3a_completeness import run_completeness_check
-    print(f"\n[ Step 3A/3A+ — {STEP_DESC['3a']} ]")
+    print(f"\n[ Step 3A — {STEP_DESC['3a']} ]")
     manifest_path = os.path.join(out_dir, "manifest.json")
-    ontology_path = os.path.join(out_dir, "ontology.json")
-    run_completeness_check(out_dir, manifest_path, ontology_path)
+    run_completeness_check(out_dir, manifest_path)
     return True
 
 
@@ -248,8 +176,7 @@ def run_step_3b(pdf, out_dir, **kw):
 def run_step_3c(pdf, out_dir, **kw):
     from step3c_consistency import run_consistency_check
     print(f"\n[ Step 3C — {STEP_DESC['3c']} ]")
-    ontology_path = os.path.join(out_dir, "ontology.json")
-    run_consistency_check(out_dir, pdf, ontology_path)
+    run_consistency_check(out_dir, pdf)
     return True
 
 
@@ -269,7 +196,7 @@ def run_step_3d(pdf, out_dir, **kw):
 
     # Build a temporary merged KRI set from raw_*.json
     merged = {"kris": []}
-    for domain in ["SOA", "ELIG", "SAF", "END", "OPS", "NDEF"]:
+    for domain in ["ELIG", "SAF", "END", "OPS"]:
         path = os.path.join(out_dir, f"raw_{domain}.json")
         if not os.path.exists(path):
             continue
@@ -320,25 +247,20 @@ def run_step_4a(pdf, out_dir, **kw):
 
 def run_step_4a_dedup(pdf, out_dir, **kw):
     print(f"\n[ Step 4A-Dedup — {STEP_DESC['4a-dedup']} ]")
-    # TODO(implementation): There is no standalone dedup script yet — the dedup
-    # logic is currently documented in SKILL.md and performed by the skill agent
-    # at runtime (or folded into step4a_assemble.py in future). This step is a
-    # placeholder that logs the requirement; the actual dedup is currently the
-    # agent's responsibility per SKILL.md "Step 4A-Dedup — Two-pass Detection".
-    print("  (Dedup logic handled by the skill agent per SKILL.md §4A-Dedup.)")
-    print("  (Cross-domain pass + intra-domain pass + kept_despite_similarity audit.)")
-    dedup_stub = os.path.join(out_dir, "dedup_report.json")
-    if not os.path.exists(dedup_stub):
-        with open(dedup_stub, "w") as f:
-            json.dump({
-                "_meta": {
-                    "note": "Stub written by run.py. Replace with real dedup_report.json "
-                            "once the dedup script is implemented."
-                },
-                "cross_domain": [],
-                "intra_domain": [],
-                "kept_despite_similarity": [],
-            }, f, indent=2, ensure_ascii=False)
+    cmd = [sys.executable, os.path.join(SCRIPTS_DIR, "step4a_dedup.py"), "--out", out_dir]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        print(f"  ⚠ step4a_dedup exited {result.returncode}. stderr: {result.stderr[-400:]}")
+        # Write a minimal stub so downstream steps don't crash
+        stub_path = os.path.join(out_dir, "dedup_report.json")
+        if not os.path.exists(stub_path):
+            with open(stub_path, "w") as f:
+                json.dump({
+                    "_meta": {"note": "step4a_dedup.py errored; stub written by run.py"},
+                    "cross_domain": [], "intra_domain": [], "kept_despite_similarity": [],
+                }, f, indent=2, ensure_ascii=False)
+        return True  # non-blocking
+    print(result.stdout.strip())
     return True
 
 
@@ -356,7 +278,7 @@ def run_step_2_6(pdf, out_dir, **kw):
     from step2_6_autojudgment import run_autojudgment_for_domain
     print(f"\n[ Step 2.6 — {STEP_DESC['2.6']} ]")
     auto = bool(kw.get("auto_approve_unanimous", True))
-    domains = kw.get("categories") or ["SOA", "ELIG", "SAF", "END", "OPS"]
+    domains = kw.get("categories") or ["ELIG", "SAF", "END", "OPS"]
     if isinstance(domains, str):
         domains = [d.strip() for d in domains.split(",")]
     ok_all = True
@@ -380,14 +302,6 @@ def run_step_4a_flagged(pdf, out_dir, **kw):
     return run_flagged(out_dir)
 
 
-def run_step_4a_ndef(pdf, out_dir, **kw):
-    from step4a_ndef_sweep import run_sweep
-    print(f"\n[ Step 4A-NDEF — {STEP_DESC['4a-ndef']} ]")
-    auto = bool(kw.get("auto_approve_t2", False))
-    rc = run_sweep(out_dir, auto_approve_t2=auto)
-    return rc == 0
-
-
 def run_step_4b(pdf, out_dir, **kw):
     golden = kw.get("golden")
     if not golden or not os.path.exists(golden):
@@ -402,10 +316,8 @@ def run_step_4b(pdf, out_dir, **kw):
 
 STEP_RUNNERS = {
     "1a":          run_step_1a,
-    "1b-camelot":  run_step_1b_camelot,
-    "1b":          run_step_1b_ontology,
-    "1c":          run_step_1c,
     "2":           run_step_2,
+    "2.6":         run_step_2_6,
     "3.5":         run_step_3_5,
     "3a":          run_step_3a,
     "3b":          run_step_3b,
@@ -413,8 +325,6 @@ STEP_RUNNERS = {
     "3d":          run_step_3d,
     "4a":          run_step_4a,
     "4a-dedup":    run_step_4a_dedup,
-    "2.6":         run_step_2_6,
-    "4a-ndef":     run_step_4a_ndef,
     "4a-flagged":  run_step_4a_flagged,
     "4b":          run_step_4b,
 }

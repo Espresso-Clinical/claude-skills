@@ -34,11 +34,10 @@ FEW-SHOT EXAMPLES:
   EXTRACTED: Verify that the participant is ≥ 64 years old at the time of the first screening visit.
   VERDICT: EQUIVALENT — same requirement, same threshold, same timing.
 
-[PAIR] SOA-V4-075 
-  GOLDEN:    V4- Verify by checking medication logs that the participant maintained 
-             a 48-hour washout for short-acting analgesics.
-  EXTRACTED: V4- Verify that a ≥48-hour washout from short-acting analgesics was observed.
-  VERDICT: SUBSET — same requirement but extracted omits "by checking medication logs".
+[PAIR] SAF-AE-001
+  GOLDEN:    Verify by checking AE CRFs that SAEs were reported to the sponsor within 24 hours of investigator awareness.
+  EXTRACTED: Verify that SAEs are reported to the sponsor within 24 hours of awareness.
+  VERDICT: SUBSET — same requirement but extracted omits "by checking AE CRFs" data source.
 
 [PAIR] OPS-IMP-001
   GOLDEN:    Verify that IMP storage logs document ≤ -150°C conditions.
@@ -251,7 +250,7 @@ def run_comparison(extracted_path: str, golden_path: str, output_dir: str):
 
     print(f"\n  Per-category:")
     print(f"  {'CAT':<6} {'EQ':>4} {'SUP':>4} {'SUB':>5} {'DIV':>5} {'MISS':>5}")
-    for cat in ["SOA", "ELIG", "SAF", "END", "OPS"]:
+    for cat in ["ELIG", "SAF", "END", "OPS"]:
         c = by_cat.get(cat, {})
         print(f"  {cat:<6} {c.get('EQUIVALENT',0):>4} {c.get('SUPERSET',0):>4} "
               f"{c.get('SUBSET',0):>5} {c.get('DIVERGENT',0):>5} {c.get('MISSING',0):>5}")
