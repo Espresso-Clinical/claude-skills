@@ -1,8 +1,8 @@
 """
 Step 4A-FlaggedReview — End-of-run cross-domain flagged-review table.
 
-Runs AFTER Step 4A-NDEF (last step before Golden Set finalization). Collects
-every flagged-and-defaulted-to-rejected KRI from all 5 domains' Step 2.6
+Runs AFTER Step 4A-Dedup (last step before Golden Set finalization). Collects
+every flagged-and-defaulted-to-rejected KRI from all 4 in-scope domains' Step 2.6
 autojudgment outputs and produces a single consolidated review table with
 FULL KRI columns so the user can efficiently scan and re-include any they want.
 
@@ -27,7 +27,7 @@ import os
 import sys
 
 
-DOMAINS = ["SOA", "ELIG", "SAF", "END", "OPS"]
+DOMAINS = ["ELIG", "SAF", "END", "OPS"]
 
 
 def build_cross_domain_review(out_dir):

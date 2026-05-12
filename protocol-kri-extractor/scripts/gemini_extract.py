@@ -272,14 +272,16 @@ def save_gemini_results(results: list, out_dir: str, domain: str):
 #      so it extracts exhaustively instead of making one broad pass and stopping
 #
 # Used ONLY for Phase 2 domain extraction of ELIG/SAF/END/OPS. SOA is
-# unchanged (deterministic 6-step process). Claude agents are unchanged.
+# OUT OF SCOPE for this skill (handled by `soa-kri-extractor`). Claude agents
+# are unchanged. Every turn prompt below is appended with the SOA exclusion
+# methodology block via `_apply_soa_guardrail()` so the agent skips any
+# SOA-flavored content it encounters in its assigned section.
 
 # Per-domain sub-area turn templates. Each tuple is (turn_name, turn_prompt).
-# These are the validated templates from APT.DFI.001 run_003 tests.
 SUB_AREA_TURNS = {
     "ELIG": [
         ("Inclusion criteria",
-         "Read Section 4.1 (Inclusion Criteria) of the PDF. Extract a KRI for EVERY inclusion criterion AND every sub-criterion (e.g. a criterion with sub-parts a, b, c; a sub-part with items i-v). Use prefix ELIG-INC-NNN. Extract judgment-based criteria into ELIG too — NDEF classification is handled post-assembly by Step 4A-NDEF (the NDEF Sweep), not by this extractor."),
+         "Read Section 4.1 (Inclusion Criteria) of the PDF. Extract a KRI for EVERY inclusion criterion AND every sub-criterion (e.g. a criterion with sub-parts a, b, c; a sub-part with items i-v). Use prefix ELIG-INC-NNN. Extract every criterion regardless of whether the wording is qualitative or quantitative — write `rule_for_llm` as faithfully as the protocol allows."),
         ("Exclusion criteria",
          "Read Section 4.2 (Exclusion Criteria). Extract a KRI for EVERY exclusion criterion AND every sub-criterion. Use prefix ELIG-EXC-NNN. Output only NEW KRIs not produced in turn 1."),
     ],
@@ -306,39 +308,6 @@ SUB_AREA_TURNS = {
          "Extract a KRI for EACH exploratory endpoint SEPARATELY. Use prefix END-EXP. Severity: minor. Output only NEW KRIs."),
         ("Governance",
          "Read the Statistical Considerations section and DMC section. Extract a KRI for EACH analysis population separately (ITT, FAS, Per Protocol, Safety, etc.), sample size justification, reduced enrollment options, interim analysis rules, DMC composition/meetings, final analysis, alpha spending. Use prefixes GOV-POP, GOV-SS, GOV-DMC, GOV-INT. Output only NEW KRIs."),
-    ],
-    # SOA-text (Phase 2) — extracts SOA rules that live in the protocol NARRATIVE,
-    # not in the SoA table. Phase 1 (Camelot + footnote mapping + Phase-1 step-5
-    # cross-visit rules) already handles the table and its footnotes. This pass
-    # catches protocol-wide / cross-visit / narrative-only rules that the table-
-    # based process does not produce. Output merges into raw_SOA.json; dedup
-    # handles any overlap with Phase 1 output (expected by design).
-    #
-    # GUARDRAILS (applied in every turn prompt below — MUST be respected):
-    #   1. Do NOT extract "procedure X at visit Y" KRIs — those come from the
-    #      Camelot table in Phase 1.
-    #   2. Do NOT extract footnote rules attached to specific table cells — the
-    #      deterministic footnote mapper already covers those.
-    #   3. Only emit KRIs that are protocol-wide, cross-visit, or narrative-only.
-    #      If a rule appears in the SoA table or its footnotes, skip it.
-    #   4. Respect Rule 1 (SOA ownership): "procedure happened at visit"
-    #      KRIs already belong to Phase-1 SOA; do not duplicate them here.
-    #   5. Use prefix SOA-TEXT-NNN for narrative-only rules. Use SOA-CROSS-NNN
-    #      for cross-visit / protocol-wide rules (same prefix Phase 1 step 5
-    #      already uses for its cross-visit output).
-    "SOA": [
-        ("Drug administration timing & separations",
-         "Read the Study Treatments / IP Administration sections (typically §5 and §7) of the PDF. Extract KRIs for timing rules that span multiple drugs or procedures — e.g., required time gaps between drug A and drug B (\"administer phage ≥2 hours before antibiotic\"), infusion-duration caps, order-of-administration rules, post-dose observation windows. Use prefix SOA-CROSS-NNN. GUARDRAILS: do NOT extract 'procedure at visit' KRIs (those come from the Camelot table in Phase 1); do NOT extract footnote rules attached to specific table cells (the footnote mapper covers those); only emit protocol-wide / cross-visit / narrative-only rules."),
-        ("Study-wide duration & schedule meta-rules",
-         "Read the Study Design / Overall Schedule sections (typically §3 and §4). Extract KRIs for study-wide rules: total subject duration caps (e.g., '≤56 weeks'), 'all visits must occur regardless of healing status' rules, screening → randomization windows, mandatory visit-sequence rules, study-phase boundaries, stopping the schedule on a condition. Use prefix SOA-CROSS-NNN. Output only NEW KRIs. GUARDRAILS: do NOT extract 'procedure at visit' KRIs (Phase 1 handles those); do NOT re-extract footnote cell rules; only emit protocol-wide narrative rules."),
-        ("Cross-visit procedure methodology",
-         "Read the Study Procedures section (typically §6) and any methodology appendices. Extract KRIs for procedure rules that apply identically across ALL visits where the procedure appears — e.g., 'bone biopsy technique must match between baseline and EOT for comparability', 'all ulcer photos use the same calibrated camera', standardized measurement position, sample-handling rules that span visits. Use prefix SOA-CROSS-NNN. Output only NEW KRIs. GUARDRAILS: do NOT extract cell-level 'procedure at visit Y' KRIs (Phase 1 Camelot owns those); do NOT extract per-visit technique details that belong to OPS; focus only on rules explicitly spanning multiple visits of the same procedure."),
-        ("Long-term follow-up obligations",
-         "Read the Long-Term Follow-Up / End-of-Study / Survival sections (typically §9–§10). Extract KRIs for obligations at long-term follow-up visits that are not cell-level procedure checks — e.g., SAE collection windows at W26/W52, vital-status capture, ulcer-recurrence assessment windows, end-of-study callback rules, follow-up beyond last dose. Use prefix SOA-CROSS-NNN or SOA-TEXT-NNN. Output only NEW KRIs. GUARDRAILS: do NOT extract 'procedure X at visit Y' KRIs (Phase 1 covers them); only extract obligations that are protocol-wide or span the LTFU period."),
-        ("Global visit windows & tolerances",
-         "Read the Visit Schedule narrative / Study Schedule overview. Extract KRIs for visit-window rules that apply uniformly across multiple visits — e.g., '±3 days for treatment visits, ±7 days for follow-up visits', grace periods, missed-visit rules, rescheduling rules, early-termination visit-window rules. Use prefix SOA-CROSS-NNN. Output only NEW KRIs. GUARDRAILS: do NOT extract a per-visit check-in window as a cell-level SOA-CHECKIN KRI (Phase 1 produces those); only emit a KRI if the rule applies uniformly to a range of visits or the whole study."),
-        ("Sample & volume caps",
-         "Read the full protocol (often §6 procedures + appendices + ICF). Extract KRIs for study-wide blood volume caps, total sample-count limits, cumulative-sample rules (e.g., 'total blood volume for the study shall not exceed ~220 mL'), tissue-sample limits, imaging-dose caps, or any other study-wide cumulative rule. Use prefix SOA-CROSS-NNN. Output only NEW KRIs. GUARDRAILS: do NOT extract per-visit sample volumes (those are cell-level from the table); only cumulative or study-wide caps."),
     ],
     "OPS": [
         ("IP Handling & Administration",
@@ -373,11 +342,8 @@ def run_gemini_extraction_multi_turn(
     extraction within that scope.
 
     Args:
-        domain: "ELIG", "SAF", "END", "OPS", or "SOA"
-                For "SOA" this extracts text-only rules (narrative / cross-visit /
-                protocol-wide) — Phase 1 Camelot+footnote mapping still handles
-                the SoA table and its cell-level/footnote rules. The SOA turns
-                include guardrails forbidding re-extraction of table content.
+        domain: "ELIG", "SAF", "END", or "OPS" (the 4 in-scope domains).
+                SOA is OUT OF SCOPE for this skill — handled by `soa-kri-extractor`.
         pdf_path: Absolute path to the protocol PDF file
         n_agents: Number of parallel agents (default 5)
         temperature_spread: Per-agent temperatures for diversity
@@ -524,7 +490,7 @@ def read_pdf_pages(pdf_path: str, page_range: str) -> str:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Gemini KRI extraction")
-    parser.add_argument("--domain", required=True, help="Domain: SOA, ELIG, SAF, END, OPS (NDEF is populated post-assembly by Step 4A-NDEF, not by this extractor)")
+    parser.add_argument("--domain", required=True, help="Domain: ELIG, SAF, END, or OPS (the 4 in-scope domains). SOA is out of scope — handled by `soa-kri-extractor`.")
     parser.add_argument("--pdf", required=True, help="Path to protocol PDF")
     parser.add_argument("--pages", required=True, help="Page range: '46-48' or '120,124,125'")
     parser.add_argument("--out", required=True, help="Output directory")

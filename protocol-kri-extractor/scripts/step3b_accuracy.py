@@ -1,5 +1,5 @@
 """
-Step 3B — Full KRI Accuracy Judging (100% coverage, 5-judge cross-model panel)
+Step 3B — Full KRI Accuracy Judging (100% coverage, 5-judge cross-model panel, 6 checks)
 
 MANDATORY BLOCKING GATE. Judges EVERY KRI across all domains. Sampling is NEVER
 permitted under any circumstances. This script replaces the prior 20-KRI / 4-per-
@@ -7,13 +7,15 @@ category sampling implementation.
 
 Panel: 3 Claude Sonnet 4 judges + 2 Gemini 2.5 Pro judges = 5 cross-model judges per KRI.
 
-Five checks per judge:
+Six checks per judge:
   C1 Faithfulness         — rule_for_llm says what the protocol says
   C2 Specific Values      — every threshold/drug/dose/timing matches exactly
-  C3 Reference Accuracy   — cited page is ABOUT the clinical topic (semantic check,
-                            catches wrong-page-but-quote-happens-to-appear cases)
+  C3 Reference Accuracy   — cited page is ABOUT the clinical topic (semantic check)
   C4 Completeness         — no critical detail the protocol specifies is missing
-  C5 Scope Accuracy       — visit/population/time-point scope matches
+  C5 Scope Accuracy       — population/time-point scope matches
+  C6 Atomicity            — KRI encodes exactly ONE binary obligation about ONE
+                            subject with at most one condition; compound KRIs FAIL
+                            C6 and are auto-split into N atomic KRIs and re-judged
 
 Consensus adjudication:
   5/5 CORRECT             → PASS
@@ -24,6 +26,9 @@ Consensus adjudication:
 Auto-correction:
   If ≥3 judges propose semantically equivalent corrections → apply and re-run
   the full 5-judge panel on the corrected KRI (mandatory re-verification).
+  C6 atomicity-split: ≥3 judges flag C6 with the same split proposal → split the
+  compound KRI into N atomic KRIs, then re-run the panel on each split KRI.
+  Original compound KRI does NOT pass.
 
 Gate: 0 FAIL, 0 unresolved FLAG before Step 3C can begin.
 
@@ -55,7 +60,7 @@ N_CLAUDE_JUDGES = 3
 N_GEMINI_JUDGES = 2
 N_PANEL = N_CLAUDE_JUDGES + N_GEMINI_JUDGES  # 5
 BATCH_SIZE = 8  # KRIs per LLM call when sharing the same page context
-DOMAINS = ["SOA", "ELIG", "SAF", "END", "OPS", "NDEF"]
+DOMAINS = ["ELIG", "SAF", "END", "OPS"]
 
 SYSTEM_PROMPT = (
     "You are a clinical trial protocol auditor checking the accuracy of extracted KRIs. "
@@ -149,19 +154,20 @@ PROTOCOL PAGE CONTEXT (the cited page + 1 page before and after):
 KRIs TO JUDGE:
 {kri_list}
 
-For EACH KRI, run all 5 independent checks and return a verdict.
+For EACH KRI, run all 6 independent checks and return a verdict.
 
-THE 5 CHECKS (every check must pass for CORRECT):
+THE 6 CHECKS (every check must pass for CORRECT):
 - C1 Faithfulness: Does rule_for_llm say what the protocol says, nothing more, nothing less? No additions, no omissions, no softening, no generalization.
 - C2 Specific Values: Every concrete value (threshold, drug name, dose, timing window, analyte, visit number, day count, percentage, unit) matches the protocol exactly.
 - C3 Reference Accuracy: The cited section + page is ABOUT the clinical topic of this KRI. This is a SEMANTIC check — not a substring match of the quote. If the KRI is about "LDL-C percent change at Week 14" but the cited page is about infusion reactions, C3 FAILS even if the quote text happens to appear on that page.
 - C4 Completeness: No critical detail the protocol specifies for this rule is missing.
 - C5 Scope Accuracy: Visit scope, population scope, and time-point scope all match protocol intent.
+- C6 Atomicity: The KRI encodes exactly ONE binary obligation about ONE procedure (or procedure-alias) at ONE visit (or visit-alias) with at most one condition. Compound KRIs that bundle multiple procedures (e.g., "W4 — Blood chemistry, hematology, ESR, CRP"), multiple visits (e.g., "Weeks 2–11 — Check-in within window"), or multiple obligations in one rule_for_llm FAIL C6. When you fail a KRI on C6, set "atomic_split_proposal" to a JSON array of the N atomic KRIs it should split into (each with its own rule_for_llm and the topic-relevant supporting_quote). The pipeline will atomic-split when ≥3 judges propose the same split.
 
 VERDICTS:
-- CORRECT: all 5 checks pass
+- CORRECT: all 6 checks pass
 - IMPRECISE: right intent, all checks semantically pass, but C2 or C4 flagged a missing detail that could be auto-corrected (e.g., missing CRP from a lab list, missing "supine" from vitals positioning)
-- WRONG: any of C1/C3/C5 failed, OR C2/C4 failed with incorrect values (not just missing)
+- WRONG: any of C1/C3/C5/C6 failed, OR C2/C4 failed with incorrect values (not just missing)
 
 Return a JSON array, one entry per KRI in the list above, in the same order:
 [
@@ -171,6 +177,7 @@ Return a JSON array, one entry per KRI in the list above, in the same order:
     "failing_checks": ["C2", "C4"],
     "issue": "specific problem description, null if CORRECT",
     "corrected_rule": "corrected rule_for_llm text, null if CORRECT",
+    "atomic_split_proposal": null,
     "protocol_evidence": "verbatim <=25-word quote from the cited page that proves your verdict"
   }},
   ...

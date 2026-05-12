@@ -13,8 +13,6 @@ DISTINCTION from other judging steps in the skill:
   - Step 3B decides CORRECTNESS of every KRI after assembly (100% coverage,
     5-judge panel). Runs in Phase 3.
   - Step 3.5 orphan scan discovers MISSED rules (6-agent panel). Runs in Phase 3.
-  - Step 4A-NDEF sweep reclassifies non-definable KRIs (6-judge panel). Runs in
-    Phase 4 post-assembly.
 Each panel has its own distinct purpose, distinct timing, and distinct artifact.
 Step 2.6 does NOT replace any of the above; it only handles the Phase-2
 inclusion decision that the user previously did manually.
@@ -158,12 +156,12 @@ def layer1_5_atomicity(kri):
     if re.search(r"\bis defined as\b", rule) and len(rule) < 40:
         return {"pass": False, "reason": "rule is a pure definition with no verifiable action"}
 
-    # Subjective qualifiers with no measurable threshold
+    # Subjective qualifiers with no measurable threshold — pass through; this
+    # skill does not classify non-binary KRIs (filtering happens downstream).
     subjective = ["as appropriate", "as needed", "as required", "if clinically appropriate"]
     for s in subjective:
         if s in rule and not re.search(r"\d", rule):
-            return {"pass": True, "reason": "subjective wording flagged but may be valid NDEF post-assembly"}
-            # NOTE: do NOT reject — NDEF Sweep handles non-verifiable post-assembly.
+            return {"pass": True, "reason": "subjective wording — kept as-is; downstream filter handles non-binary rules"}
 
     return {"pass": True, "reason": "Layer 1.5 atomicity check passed"}
 
@@ -325,7 +323,20 @@ def run_autojudgment_for_domain(out_dir, domain, pdf_path=None,
         return False
 
     with open(raw_path, encoding="utf-8") as f:
-        all_kris = json.load(f)
+        loaded = json.load(f)
+
+    # Accept both schemas: a flat list of KRI dicts (legacy) and the wrapped
+    # {"_meta": {...}, "kris": [...]} format produced by step2_extract.py.
+    if isinstance(loaded, dict) and "kris" in loaded:
+        all_kris = loaded["kris"]
+    elif isinstance(loaded, list):
+        all_kris = loaded
+    else:
+        print(f"✗ raw_{domain}.json has unexpected shape (type={type(loaded).__name__}); skipping.")
+        return False
+
+    # Drop any non-dict entries defensively (e.g., stray strings from a bad merge).
+    all_kris = [k for k in all_kris if isinstance(k, dict)]
 
     # Partition by extraction-panel vote count
     t1, t2, t3 = [], [], []
@@ -547,7 +558,7 @@ def main():
         description="Step 2.6 — Auto-judgment for T2 + T3-promoted KRIs")
     parser.add_argument("--out", required=True, help="Run output directory")
     parser.add_argument("--domain", required=True,
-                        help="Domain: SOA, ELIG, SAF, END, or OPS")
+                        help="Domain: ELIG, SAF, END, or OPS")
     parser.add_argument("--pdf", help="Protocol PDF (enables Layer-1 verbatim check)")
     parser.add_argument("--auto-approve-unanimous", dest="auto_approve_unanimous",
                         action="store_true", default=True,

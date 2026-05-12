@@ -9,7 +9,6 @@ stay consistent with the existing 10-agent extraction panel's framing.
 Step 2.6 decides INCLUSION in the Golden Set. It is distinct from:
   - Step 3B accuracy judging (decides CORRECTNESS, runs post-assembly on 100%)
   - Step 3.5 orphan scan (discovers MISSED rules)
-  - Step 4A-NDEF sweep (reclassifies non-definable KRIs)
 """
 
 
@@ -25,22 +24,22 @@ GUARDRAILS — apply to every KRI you judge:
    Respect the atomization-of-compound-clauses refinement: always-true clauses,
    illustrative-example splits, and single-field range splits are atomicity violations.
 
-3. **Domain boundary**: respect Rule 1 (SOA owns "procedure at visit"), Rule 2
-   (SAF owns thresholds + response), Rule 3 (OPS owns methodology). A KRI in the
-   wrong domain is a reject — unless the KRI itself is valid and only the
-   classification is wrong (in which case vote conditional).
+3. **Domain boundary**: respect the in-scope domain boundaries — Rule 2 (SAF owns
+   thresholds + response), Rule 3 (OPS owns methodology), ELIG owns inclusion/
+   exclusion criteria, END owns endpoint and governance rules. **Rule 1 — SOA is
+   OUT OF SCOPE for this skill (handled by `soa-kri-extractor`).** If a candidate
+   KRI is essentially "procedure happened at visit Y", "visit X within ±N days",
+   or any other SOA-flavored pattern, REJECT with reason "out_of_scope_soa".
 
 4. **Binary rule_for_llm**: the rule must produce a clear YES/NO on subject data.
-   Narrative prose, vague descriptions, or non-verifiable language = reject.
+   Narrative prose, vague descriptions = reject. When the protocol itself uses
+   qualitative language (e.g., "in the investigator's opinion", "as soon as
+   possible"), KEEP the candidate and preserve the qualitative wording verbatim —
+   downstream filtering of non-binary rules happens outside this skill.
 
 5. **Coverage**: if the KRI duplicates an approved Tier-1 KRI already covered by
    the deterministic dedup filter, it should already have been caught by Layer 2.
    If you see a duplicate pair the filter missed, flag it.
-
-6. **NDEF scope**: if the rule is genuinely non-verifiable (investigator judgment,
-   undefined time windows, undefined effort), the KRI is still valid here — it
-   will be moved to NDEF by Step 4A-NDEF post-assembly. Do not reject just for
-   being non-verifiable; reject only if the rule is not a real obligation.
 
 Return valid JSON with no markdown fences, no prose, no extra text.
 """

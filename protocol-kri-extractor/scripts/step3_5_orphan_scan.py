@@ -5,8 +5,10 @@ Runs FIRST in Phase 3, after Phase 2 completes (all raw_{DOMAIN}.json written),
 before Step 3A. Scans the ENTIRE protocol for rule-like statements that were not
 captured by any domain extractor in Phase 2.
 
-Distinct from (and additional to) the Step 1C footnote orphan validation in
-footnote_mapper.py. Both orphan mechanisms run. Neither replaces the other.
+SOA-flavored candidates (procedure-at-visit, visit-window, SoA table content,
+SoA footnotes, cross-visit timing) are dropped during candidate consolidation
+with reason `out_of_scope_soa` — they belong to the separate `soa-kri-extractor`
+skill and are never promoted to a KRI here.
 
 Architecture:
   6-agent cross-model panel (3 Claude Sonnet 4 + 3 Gemini 2.5 Pro)
@@ -49,14 +51,16 @@ CLAUDE_MODEL = "claude-sonnet-4-20250514"
 N_CLAUDE_AGENTS = 3
 N_GEMINI_AGENTS = 3
 N_PANEL = N_CLAUDE_AGENTS + N_GEMINI_AGENTS  # 6
-DOMAINS = ["SOA", "ELIG", "SAF", "END", "OPS"]
-# NDEF is intentionally excluded here: orphans are classified into one of the 5
-# real domains. Reclassification to NDEF happens post-assembly in the NDEF Sweep
-# (Step 4A-NDEF, scripts/step4a_ndef_sweep.py).
+DOMAINS = ["ELIG", "SAF", "END", "OPS"]
+# SOA is OUT OF SCOPE for this skill — handled by `soa-kri-extractor`. Any
+# SOA-flavored candidate that an agent flags is dropped during candidate
+# consolidation with reason `out_of_scope_soa` rather than being promoted to a
+# KRI here. The agent prompts below carry the SOA-exclusion methodology so
+# agents are told to skip SoA table content / procedure-at-visit rules / visit-
+# window rules from the start.
 FALLBACK_DOMAIN = "OPS"  # Used when an agent proposes an unknown domain.
 
 DOMAIN_LABELS = {
-    "SOA": "Schedule of Activities",
     "ELIG": "Eligibility",
     "SAF": "Safety & Toxicity",
     "END": "Endpoints & Statistics",
@@ -68,7 +72,17 @@ SYSTEM_PROMPT = (
     "statements in the protocol that are NOT already captured by the provided list of "
     "extracted KRIs. You favor high recall: when in doubt, FLAG the statement. "
     "Adjudication filters false positives later. You always return valid JSON with no "
-    "markdown fences, no prose, no extra text."
+    "markdown fences, no prose, no extra text.\n\n"
+    "OUT OF SCOPE — SOA (Schedule of Activities). Schedule-of-Activities content is "
+    "handled by the separate `soa-kri-extractor` skill. Do NOT flag any candidate "
+    "whose subject is 'procedure X at visit Y', 'visit X within ±N days', any "
+    "rule anchored to a specific visit code that says something HAPPENS at that "
+    "visit, the SoA table itself, its footnotes, or the visit-schedule narrative. "
+    "If you see such content, skip it — set proposed_domain to 'OUT_OF_SCOPE_SOA' "
+    "and the consolidation step will drop it with reason `out_of_scope_soa`. Do "
+    "NOT silently reclassify SoA content under ELIG/SAF/END/OPS — that would "
+    "smuggle out-of-scope content into this skill's output. Skip is the only "
+    "correct action."
 )
 
 
@@ -156,7 +170,7 @@ Find every rule-like statement that is NOT already covered by one of the existin
     "candidate_text": "the rule-like statement as a verbatim or near-verbatim excerpt from the protocol (<=30 words)",
     "page": <page number where it appears>,
     "surrounding_context": "<=50 words of context around the statement for disambiguation",
-    "proposed_domain": "SOA|ELIG|SAF|END|OPS",
+    "proposed_domain": "ELIG|SAF|END|OPS|OUT_OF_SCOPE_SOA",
     "reason_not_covered": "brief explanation of why this is not already covered by an existing KRI"
   }},
   ...
@@ -183,7 +197,7 @@ Return a JSON array, one entry per candidate orphan:
     "candidate_text": "the rule-like statement as a verbatim or near-verbatim excerpt from the protocol (<=30 words)",
     "page": <page number where it appears>,
     "surrounding_context": "<=50 words of context around the statement for disambiguation",
-    "proposed_domain": "SOA|ELIG|SAF|END|OPS",
+    "proposed_domain": "ELIG|SAF|END|OPS|OUT_OF_SCOPE_SOA",
     "reason_not_covered": "zero-KRI section — no existing KRI covers this content"
   }},
   ...
@@ -622,10 +636,19 @@ def run_orphan_scan(output_dir, pdf_path):
     promoted_kris = []
     classification_counts = {d: 0 for d in DOMAINS}
     per_domain_counters = {d: 0 for d in DOMAINS}
+    dropped_out_of_scope_soa = []
 
     for c in promoted:
-        # Use a per-domain counter so IDs are ORPH-SAF-001, ORPH-SAF-002, etc.
         tentative_domain = c.get("proposed_domain", FALLBACK_DOMAIN)
+        # SOA is OUT OF SCOPE for this skill — drop with reason `out_of_scope_soa`.
+        if tentative_domain == "OUT_OF_SCOPE_SOA" or tentative_domain == "SOA":
+            dropped_out_of_scope_soa.append({
+                "candidate_text": c.get("candidate_text"),
+                "page": c.get("page"),
+                "proposed_domain": tentative_domain,
+                "reason": "out_of_scope_soa — handled by soa-kri-extractor",
+            })
+            continue
         if tentative_domain not in DOMAINS:
             tentative_domain = FALLBACK_DOMAIN
         per_domain_counters[tentative_domain] += 1
@@ -635,6 +658,10 @@ def run_orphan_scan(output_dir, pdf_path):
         promoted_kris.append(kri)
         classification_counts[domain] += 1
         domain_files.setdefault(domain, []).append(kri)
+
+    if dropped_out_of_scope_soa:
+        print(f"  Dropped {len(dropped_out_of_scope_soa)} SOA-flavored candidate(s) "
+              f"as out_of_scope_soa (handled by soa-kri-extractor)")
 
     # ── Save updated raw_{DOMAIN}.json files ───────────────────────────────
     for domain, kris in domain_files.items():
@@ -689,7 +716,9 @@ def run_orphan_scan(output_dir, pdf_path):
         },
         "classification": {
             "by_domain": classification_counts,
+            "dropped_as_out_of_scope_soa": len(dropped_out_of_scope_soa),
         },
+        "out_of_scope_soa": dropped_out_of_scope_soa,
         "promoted_orphans": promoted_kris,
     }
 
