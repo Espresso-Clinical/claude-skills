@@ -307,7 +307,7 @@ def refine_low_confidence_bindings(grid, footnote_map, client=None):
         return grid
     if client is None:
         try:
-            client = anthropic.Anthropic(timeout=60.0, max_retries=2)
+            client = anthropic.Anthropic()
         except Exception as e:
             print(f"  ⚠ atomic_normalizer.refine: anthropic client init failed ({e}) — skipping LLM refinement.")
             return grid
@@ -347,7 +347,6 @@ def refine_low_confidence_bindings(grid, footnote_map, client=None):
                 model=CLAUDE_MODEL,
                 max_tokens=600,
                 messages=[{"role": "user", "content": prompt}],
-                timeout=45.0,
             )
             fragment = (response.content[0].text or "").strip()
             if fragment.startswith('"') and fragment.endswith('"'):

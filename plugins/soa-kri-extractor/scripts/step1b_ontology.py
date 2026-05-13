@@ -115,35 +115,18 @@ Critical rules:
 - Return ONLY the JSON object"""
 
     print(f"  Calling Claude for ontology ({len(soa_pages)} pages)...")
-    max_tokens = 16000
-    last_err = None
-    response = None
-    ontology = None
-    for attempt in range(3):
-        response = client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=max_tokens,
-            messages=[{"role": "user", "content": user_prompt}],
-            system=SYSTEM_PROMPT,
-            timeout=180.0,
-        )
-        if response.stop_reason == "max_tokens":
-            print(f"  ⚠ ontology output hit max_tokens={max_tokens}; retrying with double cap")
-            max_tokens = min(max_tokens * 2, 32000)
-            last_err = "max_tokens truncation"
-            continue
-        raw = response.content[0].text.strip()
-        raw = re.sub(r'^```[a-z]*\n?', '', raw)
-        raw = re.sub(r'\n?```$', '', raw)
-        try:
-            ontology = json.loads(raw)
-            break
-        except json.JSONDecodeError as e:
-            last_err = f"JSONDecodeError: {e}"
-            print(f"  ⚠ ontology JSON parse failed (attempt {attempt+1}/3): {e}")
-            continue
-    if ontology is None:
-        raise RuntimeError(f"build_ontology failed after 3 attempts — {last_err}")
+    response = client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=8000,
+        messages=[{"role": "user", "content": user_prompt}],
+        system=SYSTEM_PROMPT
+    )
+
+    raw = response.content[0].text.strip()
+    raw = re.sub(r'^```[a-z]*\n?', '', raw)
+    raw = re.sub(r'\n?```$', '', raw)
+
+    ontology = json.loads(raw)
     ontology["_meta"] = {
         "step": "1B",
         "protocol_id": manifest.get("protocol_id"),
