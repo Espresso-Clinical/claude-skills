@@ -28,7 +28,7 @@ STEP_CATALOG = [
     ("2",          "Camelot SoA table extraction (with multi-row header handling)",  False),
     ("3",          "Vision fallback for superscript recovery",                       False),
     ("4",          "Column boundary verification",                                   False),
-    ("5",          "SoA ontology + cross-visit rules",                               False),
+    ("5",          "SoA ontology + cross-visit rules",                               True),
     ("6",          "Deterministic footnote mapper (section-header filter)",          False),
     ("7",          "Atomic Normalization (visit + procedure decomp, topic-bound footnotes)", False),
     ("8",          "Alias / Canonical Name Map",                                     False),
@@ -215,7 +215,7 @@ def run_step_12(pdf, out_dir, **kw):
 def run_step_13(pdf, out_dir, **kw):
     print(f"\n[ Step 13 — {STEP_DESC['13']} ]  (BLOCKING)")
     from step3_5_orphan_scan import run_orphan_scan
-    ok = run_orphan_scan(pdf, out_dir)
+    ok = run_orphan_scan(out_dir, pdf)
     enforce("13", ok)
     return ok
 

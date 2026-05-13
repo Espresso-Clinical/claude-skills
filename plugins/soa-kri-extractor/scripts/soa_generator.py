@@ -179,8 +179,12 @@ def generate(grid_path, alias_path, footnote_map_path, soa_table_path,
         fn_map = json.load(f)
     with open(soa_table_path) as f:
         soa_table = json.load(f)
-    with open(ontology_path) as f:
-        ontology = json.load(f)
+    if os.path.exists(ontology_path):
+        with open(ontology_path) as f:
+            ontology = json.load(f)
+    else:
+        print(f"  ⚠ {ontology_path} missing — proceeding without ontology (no SOA-CROSS Pass-3 rules)")
+        ontology = {"visits": [], "procedures": [], "footnotes": {}, "cross_visit_rules": []}
     with open(manifest_path) as f:
         manifest = json.load(f)
     alias_map = {}
