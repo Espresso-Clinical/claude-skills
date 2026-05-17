@@ -1,213 +1,180 @@
 """
-Step 3A — Completeness Critic
-Checks extracted KRIs for completeness against the ontology.
-For SOA: every procedure × visit cell must have a KRI.
-For other categories: every subsection must have coverage.
-Outputs gaps.json — fed back to step2 for re-extraction of missing items.
+Step 3A — Completeness Check
+For each in-scope domain (ELIG, SAF, END, OPS), verify that every obligation
+sentence recorded in `{domain}_obligation_inventory.json` (Step 2.5) has at
+least one KRI whose `supporting_quote` covers it.
+
+Also runs the H4 SAF heuristic — the single retained heuristic from the prior
+H1–H10 set after SOA extraction moved to the separate `soa-kri-extractor`
+skill. H4 verifies that raw_SAF.json contains a KRI defining the AE collection
+window starting at first IP dose.
+
+Outputs gaps_report.json — fed back to step 2 / Tier 3 for re-extraction or
+candidate promotion of missing items.
 """
 
 import json, sys, re, os
 import anthropic
 
 SYSTEM_PROMPT = """You are a clinical trial quality control expert.
-You audit KRI extraction outputs for completeness against a reference ontology.
+You audit KRI extraction outputs for completeness against an obligation
+inventory and against universal clinical-trial heuristics.
 You always return valid JSON. No markdown, no prose."""
 
-def check_soa_completeness(client, kris: list, ontology: dict, protocol_id: str) -> dict:
-    """Cross-reference every procedure × visit cell against extracted KRIs."""
 
-    visits = ontology.get("visits", [])
-    procedures = ontology.get("procedures", [])
+def _normalize(text: str) -> str:
+    return re.sub(r"\s+", " ", (text or "").strip().lower())
 
-    # Build expected set: (procedure_id, visit_id) for all required combinations
-    expected = set()
-    for proc in procedures:
-        for v_id in proc.get("required_at", []):
-            expected.add((proc["procedure_id"], v_id))
 
-    # Build found set from KRIs — extract visit prefix and procedure hint from kri_name
-    # Use LLM to do this mapping accurately
-    kri_summary = [{"kri_id": k["kri_id"], "kri_name": k.get("kri_name", ""),
-                    "rule_for_llm": (k.get("rule_for_llm") or "")[:80]}
-                   for k in kris]
+def check_obligation_coverage(domain: str, kris: list, inventory: dict) -> dict:
+    """Determine which obligation sentences in the inventory are covered by ≥1 KRI."""
+    obligations = inventory.get("obligations", []) if isinstance(inventory, dict) else []
+    if not obligations:
+        return {
+            "domain": domain,
+            "total_expected": 0,
+            "total_covered": 0,
+            "coverage_pct": 100.0,
+            "gaps": [],
+        }
 
-    visits_json = json.dumps(visits, indent=2)
-    procs_json = json.dumps([{
-        "procedure_id": p["procedure_id"],
-        "canonical_name": p["canonical_name"],
-        "required_at": p["required_at"]
-    } for p in procedures], indent=2)
+    quotes = [_normalize(k.get("supporting_quote", "")) for k in kris]
+    covered, gaps = 0, []
+    for ob in obligations:
+        sentence = _normalize(ob.get("sentence", ""))
+        if not sentence:
+            continue
+        is_covered = any(sentence in q or q in sentence for q in quotes if q)
+        if is_covered:
+            covered += 1
+        else:
+            gaps.append({
+                "obligation_sentence": ob.get("sentence"),
+                "page": ob.get("page"),
+                "section": ob.get("section"),
+                "severity": ob.get("severity", "MODERATE"),
+                "note": "uncovered obligation — promote to Tier 3 / orphan scan",
+            })
 
-    prompt = f"""Protocol: {protocol_id}
+    total = len([o for o in obligations if _normalize(o.get("sentence", ""))])
+    return {
+        "domain": domain,
+        "total_expected": total,
+        "total_covered": covered,
+        "coverage_pct": round(100.0 * covered / total, 1) if total else 100.0,
+        "gaps": gaps,
+    }
 
-You are checking whether the following extracted KRIs provide complete coverage 
-of the Schedule of Activities.
 
-ONTOLOGY — EXPECTED COVERAGE (procedure × visit combinations):
-Visits: {visits_json}
+def check_h4_ae_collection_window(client, saf_kris: list, protocol_id: str) -> dict:
+    """H4 — verify SAF has a KRI defining the AE collection window starting at
+    first IP dose (and ending at a defined cutoff). The only retained heuristic
+    after SOA extraction moved to soa-kri-extractor.
+    """
+    if not saf_kris:
+        return {
+            "h4_covered": False,
+            "h4_kri_id": None,
+            "h4_reason": "raw_SAF.json is empty — no AE-collection-window KRI present",
+        }
 
-Procedures (with required_at visit IDs):
-{procs_json}
-
-EXTRACTED SOA KRIs:
-{json.dumps(kri_summary, indent=2)}
-
-For each procedure in the ontology, check whether a KRI exists for each visit 
-where it is required (in required_at list).
-
-A KRI covers a procedure × visit if the KRI's visit prefix (e.g. V1-, S1-, V4-) 
-matches the visit and the KRI name/rule refers to that procedure.
-
-Return a JSON object:
-{{
-  "total_expected": <number of procedure×visit cells>,
-  "total_covered": <number covered by at least one KRI>,
-  "coverage_pct": <0-100>,
-  "gaps": [
-    {{
-      "procedure_id": "...",
-      "canonical_name": "...",
-      "missing_at_visits": ["visit_id1", "visit_id2"],
-      "severity": "CRITICAL|MODERATE|MINOR",
-      "note": "brief explanation"
-    }}
-  ]
-}}
-
-Severity:
-- CRITICAL: intervention, lab, or consent procedure missing at a treatment visit
-- MODERATE: assessment missing at follow-up visit
-- MINOR: administrative or low-risk procedure missing"""
-
-    print(f"  Checking SOA completeness ({len(expected)} expected cells, {len(kris)} KRIs)...")
-    response = client.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=4000,
-        messages=[{"role": "user", "content": prompt}],
-        system=SYSTEM_PROMPT
-    )
-    raw = response.content[0].text.strip()
-    raw = re.sub(r'^```[a-z]*\n?', '', raw)
-    raw = re.sub(r'\n?```$', '', raw)
-    return json.loads(raw), response.usage.input_tokens + response.usage.output_tokens
-
-def check_category_completeness(client, category: str, kris: list,
-                                manifest: dict, ontology: dict) -> dict:
-    """Check that all subsections in manifest have KRI coverage."""
-    protocol_id = manifest.get("protocol_id", "UNKNOWN")
-    sections = manifest.get("section_map", {}).get(category, [])
-    kri_summary = [{"kri_id": k["kri_id"], "kri_name": k.get("kri_name", ""),
-                    "rule_for_llm": (k.get("rule_for_llm") or "")[:100]}
-                   for k in kris]
+    summary = [
+        {"kri_id": k["kri_id"], "kri_name": k.get("kri_name", ""),
+         "rule_for_llm": (k.get("rule_for_llm") or "")[:200]}
+        for k in saf_kris
+    ]
 
     prompt = f"""Protocol: {protocol_id}
-Category: {category}
 
-The following protocol sections should be covered by KRIs:
-{json.dumps(sections, indent=2)}
+You are checking AE-collection-window coverage in the SAF KRI set.
 
-Extracted KRIs for this category:
-{json.dumps(kri_summary, indent=2)}
+Does at least one SAF KRI clearly define when adverse-event (AE) collection
+STARTS (relative to first IP administration) AND when it ENDS (e.g. last dose,
+N days post-last-dose, end of follow-up)?
 
-Check: does every major requirement area in the sections have at least one KRI?
-Common gaps to look for:
-- ELIG: every numbered inclusion AND exclusion criterion should have ≥1 KRI
-- SAF: reporting timelines, emergency management, pregnancy, stopping rules
-- END: each named endpoint level (primary, key secondary, secondary, exploratory),
-       each ICE type, each analysis set definition, key statistical rules
-- OPS: IMP handling, blinding, records, regulatory/GCP
+SAF KRIs:
+{json.dumps(summary, indent=2)}
 
 Return JSON:
 {{
-  "coverage_assessment": "brief overall assessment in 1-2 sentences",
-  "total_kris": {len(kris)},
-  "gaps": [
-    {{
-      "area": "short description of what is missing",
-      "expected_kri_count": <estimate>,
-      "severity": "CRITICAL|MODERATE|MINOR",
-      "protocol_hint": "section number or topic where this content lives"
-    }}
-  ]
+  "h4_covered": true | false,
+  "h4_kri_id": "<id of the covering KRI, or null>",
+  "h4_reason": "<one sentence — either where it is covered, or what is missing>"
 }}"""
 
     response = client.messages.create(
         model="claude-sonnet-4-20250514",
-        max_tokens=2000,
+        max_tokens=400,
         messages=[{"role": "user", "content": prompt}],
-        system=SYSTEM_PROMPT
+        system=SYSTEM_PROMPT,
     )
     raw = response.content[0].text.strip()
-    raw = re.sub(r'^```[a-z]*\n?', '', raw)
-    raw = re.sub(r'\n?```$', '', raw)
-    return json.loads(raw), response.usage.input_tokens + response.usage.output_tokens
+    raw = re.sub(r"^```[a-z]*\n?", "", raw)
+    raw = re.sub(r"\n?```$", "", raw)
+    return json.loads(raw)
 
-def run_completeness_check(output_dir: str, manifest_path: str, ontology_path: str):
+
+def run_completeness_check(output_dir: str, manifest_path: str):
     client = anthropic.Anthropic()
 
     with open(manifest_path) as f:
         manifest = json.load(f)
-    with open(ontology_path) as f:
-        ontology = json.load(f)
 
     protocol_id = manifest.get("protocol_id", "UNKNOWN")
     print(f"\nCompleteness check: {protocol_id}")
 
-    all_gaps = {}
-    total_tokens = 0
+    all_results = {}
 
-    for cat in ["SOA", "ELIG", "SAF", "END", "OPS"]:
+    for cat in ["ELIG", "SAF", "END", "OPS"]:
         raw_path = os.path.join(output_dir, f"raw_{cat}.json")
         if not os.path.exists(raw_path):
             print(f"  {cat}: no raw file found — skipping")
             continue
-
         with open(raw_path) as f:
-            raw_data = json.load(f)
-        kris = raw_data.get("kris", [])
-        print(f"\n  {cat}: {len(kris)} KRIs")
+            kris = json.load(f).get("kris", [])
 
+        inv_path = os.path.join(output_dir, f"{cat}_obligation_inventory.json")
+        inventory = {}
+        if os.path.exists(inv_path):
+            with open(inv_path) as f:
+                inventory = json.load(f)
+
+        result = check_obligation_coverage(cat, kris, inventory)
+        critical = [g for g in result["gaps"] if g.get("severity") == "CRITICAL"]
+        print(f"  {cat}: {len(kris)} KRIs — coverage "
+              f"{result['coverage_pct']:.0f}% ({result['total_covered']}/{result['total_expected']}), "
+              f"gaps: {len(result['gaps'])} ({len(critical)} CRITICAL)")
+        all_results[cat] = result
+
+    # H4 SAF heuristic
+    saf_path = os.path.join(output_dir, "raw_SAF.json")
+    if os.path.exists(saf_path):
+        with open(saf_path) as f:
+            saf_kris = json.load(f).get("kris", [])
         try:
-            if cat == "SOA":
-                result, tokens = check_soa_completeness(client, kris, ontology, protocol_id)
-                pct = result.get("coverage_pct", 0)
-                gaps = result.get("gaps", [])
-                print(f"    Coverage: {pct:.0f}% ({result.get('total_covered')}/{result.get('total_expected')})")
-            else:
-                result, tokens = check_category_completeness(client, cat, kris, manifest, ontology)
-                gaps = result.get("gaps", [])
-                print(f"    Assessment: {result.get('coverage_assessment', '')[:80]}")
-
-            total_tokens += tokens
-            critical = [g for g in gaps if g.get("severity") == "CRITICAL"]
-            moderate = [g for g in gaps if g.get("severity") == "MODERATE"]
-            print(f"    Gaps: {len(gaps)} ({len(critical)} CRITICAL, {len(moderate)} MODERATE)")
-            for g in critical[:3]:
-                area = g.get("area") or g.get("canonical_name", "")
-                print(f"      ⚠ CRITICAL: {area[:70]}")
-
-            all_gaps[cat] = {"result": result, "tokens": tokens}
-
+            h4 = check_h4_ae_collection_window(client, saf_kris, protocol_id)
+            print(f"\n  H4 SAF heuristic: covered={h4.get('h4_covered')} — "
+                  f"{h4.get('h4_reason', '')[:80]}")
+            all_results["_h4_saf"] = h4
         except Exception as e:
-            print(f"    ERROR: {e}")
-            import traceback; traceback.print_exc()
+            print(f"  H4 SAF heuristic — ERROR: {e}")
 
-    # Save gaps report
     out_path = os.path.join(output_dir, "gaps_report.json")
     with open(out_path, "w") as f:
         json.dump({
-            "_meta": {"step": "3A", "protocol_id": protocol_id, "tokens_used": total_tokens},
-            "gaps_by_category": all_gaps
-        }, f, indent=2)
+            "_meta": {"step": "3A", "protocol_id": protocol_id},
+            "obligation_coverage_by_domain": {
+                k: v for k, v in all_results.items() if not k.startswith("_")
+            },
+            "h4_saf_heuristic": all_results.get("_h4_saf"),
+        }, f, indent=2, ensure_ascii=False)
     print(f"\n  Saved → {out_path}")
-    print(f"  Total tokens: {total_tokens}")
+
 
 if __name__ == "__main__":
-    PROTOCOLS = {
-        "ENX-CL-05-002": "/home/claude/protocol-kri-extractor/output/ENX-CL-05-002",
-        "B1481038":       "/home/claude/protocol-kri-extractor/output/B1481038",
-        "LCZ696G2301":    "/home/claude/protocol-kri-extractor/output/LCZ696G2301"
-    }
-    target = sys.argv[1] if len(sys.argv) > 1 else "ENX-CL-05-002"
-    d = PROTOCOLS[target]
-    run_completeness_check(d, os.path.join(d, "manifest.json"), os.path.join(d, "ontology.json"))
+    import argparse
+    parser = argparse.ArgumentParser(description="Step 3A — Completeness check")
+    parser.add_argument("--dir", required=True, help="Run directory (must contain manifest.json and raw_*.json)")
+    args = parser.parse_args()
+
+    run_completeness_check(args.dir, os.path.join(args.dir, "manifest.json"))

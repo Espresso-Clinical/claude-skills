@@ -507,7 +507,7 @@ pip install pdfplumber pymupdf camelot-py[cv] opencv-python-headless openpyxl ra
 
 ### Full pipeline command (canonical entry point)
 ```bash
-python /Users/ofir/.claude/skills-repo/amendment-sync/scripts/run.py \
+python ~/.claude/skills-repo/plugins/amendment-sync/scripts/run.py \
   --old-doc /path/to/protocol_v3.0.pdf \
   --new-doc /path/to/protocol_v4.0.pdf \
   --golden  /path/to/extractor/<protocol_id>/<v3_run>/extracted_kris.json \

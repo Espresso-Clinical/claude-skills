@@ -1,18 +1,20 @@
 #!/usr/bin/env python3
-"""Compare V7 KRIs against V5 and V6 across all 5 categories.
+"""Compare V7 KRIs against V5 and V6 across the in-scope categories.
 
 Strategy:
-1. For SOA: IDs were renumbered between versions, so we match semantically
-   based on visit+activity topic, not by ID.
-2. For non-SOA categories: IDs are stable, match by ID first, then semantic.
-3. Judge each pair: EQUIVALENT, SUBSET, SUPERSET, DIVERGENT.
+1. IDs are stable across versions for the in-scope domains (ELIG/SAF/END/OPS);
+   match by ID first, then semantically.
+2. Judge each pair: EQUIVALENT, SUBSET, SUPERSET, DIVERGENT.
+
+Note: SOA is OUT OF SCOPE for this skill (handled by `soa-kri-extractor`);
+SOA comparison is performed in that skill, not here.
 """
 import json
 import os
 import re
 
-BASE = "/Users/ron/Downloads/protocol Parser"
-CATEGORIES = ["SOA", "ELIG", "SAF", "END", "OPS"]
+BASE = os.environ.get("KRI_COMPARE_BASE", os.path.expanduser("~/Downloads/protocol Parser"))
+CATEGORIES = ["ELIG", "SAF", "END", "OPS"]
 
 def load_kris(ver, cat):
     path = os.path.join(BASE, f"output_ENX_{ver}", f"raw_{cat}.json")
@@ -334,10 +336,7 @@ def main():
         for old_ver in ["v5", "v6"]:
             old_items = load_kris(old_ver, cat)
 
-            if cat == "SOA":
-                result = compare_soa(old_ver, old_items, v7_items)
-            else:
-                result = compare_standard(old_ver, old_items, v7_items)
+            result = compare_standard(old_ver, old_items, v7_items)
 
             out_path = os.path.join(BASE, "output_ENX_v7", f"{old_ver}v7_comparison_{cat}.json")
             with open(out_path, 'w') as f:

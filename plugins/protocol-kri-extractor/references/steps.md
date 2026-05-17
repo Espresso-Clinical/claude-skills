@@ -9,16 +9,48 @@ Claude uses these directly when running the pipeline.
 
 ```python
 DOMAIN_CATEGORIES = {
-    "SOA":  "Schedule of Activities — visit schedule, procedure matrix, footnotes, visit windows",
     "ELIG": "Eligibility — inclusion criteria, exclusion criteria, randomization criteria",
     "SAF":  "Safety & Toxicity — AE/SAE reporting, stopping rules, toxicity management, safety monitoring",
     "END":  "Endpoints & Statistics — objectives, efficacy endpoints, analysis sets, statistical methods",
     "OPS":  "Operations & Compliance — IMP handling, blinding, records retention, regulatory, GCP compliance",
 }
 
+# Schedule of Activities (SOA) is OUT OF SCOPE for this skill — handled by
+# the separate `soa-kri-extractor` skill. Every extractor prompt below carries
+# the SOA-exclusion methodology block.
+
+SOA_EXCLUSION_BLOCK = """
+## Out of scope — SOA (Schedule of Activities)
+
+Schedule-of-Activities content is handled by the separate `soa-kri-extractor`
+skill. It is OUT OF SCOPE for this extractor. Do NOT emit any KRI whose subject
+is one of the following:
+
+- "Procedure X is performed at visit Y" (any procedure × visit cell).
+- "Visit X must occur within ±N days of [reference]" (visit windows / check-ins).
+- Any rule that anchors an obligation to a specific visit code (V1, V2, SCR,
+  EDC, EOS, Day 1, Week 4, etc.) and is essentially saying that something
+  *happens* at that visit.
+- Content from the SoA table itself, its footnotes, or the visit-schedule
+  narrative section (drug-timing separations, cross-visit windows, "all visits
+  must occur" rules, sample/volume caps tied to the visit schedule, long-term
+  follow-up obligations defined by visit cadence).
+- "Per SOA", "per the Schedule of Activities", "per the SoA table" or
+  equivalent phrasings — these are SOA-flavored and out of scope.
+
+If you encounter SOA-flavored content while extracting your assigned domain
+section, SKIP it. Do not output a KRI for it. The orphan scan (Step 3.5) and
+the cross-domain dedup (Step 4A-Dedup) carry the same exclusion and will
+drop any SOA-flavored KRI that slips through.
+
+This is NOT a judgment call. If a rule is essentially about *when* or *at
+which visit* something occurs, it is SOA — out of scope. Other skills handle
+it. Stay strictly within your assigned domain's content type.
+"""
+
 SYSTEM_PROMPT = """You are a clinical trial protocol expert and CRA (Clinical Research Associate).
 You extract information from protocol documents with precision and faithfulness.
-You always return valid JSON with no markdown fences, no prose, no extra text."""
+You always return valid JSON with no markdown fences, no prose, no extra text.""" + SOA_EXCLUSION_BLOCK
 ```
 
 ---
@@ -48,7 +80,6 @@ Return a JSON object:
   "therapeutic_area": "cardiovascular|oncology|immunology|neurology|musculoskeletal|other",
   "total_pages": N,
   "section_map": {
-    "SOA":  [{"section_number": "3", "title": "Schedule of Activities", "pages_approx": [22, 26]}],
     "ELIG": [...],
     "SAF":  [...],
     "END":  [...],
@@ -56,16 +87,22 @@ Return a JSON object:
   }
 }
 
-Domain categories:
-- SOA:  Schedule of Activities — visit schedule, procedure matrix, footnotes, visit windows
+Domain categories (the only 4 in scope for this skill):
 - ELIG: Eligibility — inclusion criteria, exclusion criteria, randomization criteria
 - SAF:  Safety & Toxicity — AE/SAE reporting, stopping rules, toxicity management
 - END:  Endpoints & Statistics — objectives, endpoints, analysis sets, statistical methods
 - OPS:  Operations & Compliance — IMP handling, blinding, records, regulatory
 
+Out of scope (handled by `soa-kri-extractor`):
+- SOA — Schedule of Activities. Sections primarily about the SoA table, its
+  footnotes, visit schedule, visit windows, or "procedure × visit" cells must
+  be LEFT UNMAPPED. Do not add an "SOA" key. Do not classify SoA sections under
+  any other domain either — just omit them from `section_map`.
+
 Rules:
 - Each section goes in at most one category (its PRIMARY domain)
 - pages_approx: use [null, null] if page numbers not visible in TOC
+- SoA sections (Schedule of Activities, visit schedule, procedure matrix, footnote pages, visit-window narrative) are LEFT UNMAPPED — they are out of scope for this skill
 - Return ONLY the JSON object
 ```
 
@@ -73,471 +110,144 @@ Rules:
 
 ---
 
-## Step 1B-Camelot — Table Extraction (PRIMARY)
+## Step 2 — KRI Extraction (per category, multi-model)
 
-**Purpose**: Use Camelot (lattice mode) to extract the SoA table deterministically from the PDF. This is the **PRIMARY** source of truth for the SoA procedure × visit grid. Camelot reads the table's line geometry from the PDF and produces ~99% structural accuracy — deterministic, reproducible, and not affected by LLM variance.
-
-**Dependencies**: `camelot-py[cv]`, `opencv-python-headless` (`pip install camelot-py[cv] opencv-python-headless --break-system-packages -q`)
-
-**Implementation**:
-
-```python
-import sys
-sys.path.insert(0, "/path/to/scripts")
-from camelot_table_extractor import run_extraction
-
-# Auto-detect SoA pages and extract
-result = run_extraction(
-    pdf_path="protocol.pdf",
-    out_dir="{out_dir}/",
-    pages=None  # Auto-detect, or specify e.g. "24" or "22,23,24"
-)
-
-# Result contains:
-#   result["csv_path"]  -> {out_dir}/soa_table.csv
-#   result["json_path"] -> {out_dir}/soa_table.json
-#   result["parsed"]    -> structured dict with visits, procedures, matrix
-```
-
-**What Camelot produces**:
-- `soa_table.csv` — the SoA matrix in CSV format (procedures as rows, visits as columns, X marks)
-- `soa_table.json` — structured JSON with both visit-centric and procedure-centric views
-
-**Multi-page table handling**: Many protocols split the SoA across 2-3 pages. The `merge_multipage_tables()` function automatically detects matching column structures and merges procedure rows.
-
-**Known limitation**: Camelot may miss cells where the content is "X" plus footnote superscripts (e.g., "X¹⁰", "X¹³·¹⁴"). These appear as empty cells in Camelot's output. Use Vision fallback (Step 1B-Vision) to recover these.
-
-**Save outputs**:
-- `{out_dir}/soa_table.csv` — canonical CSV (use this for all downstream steps)
-- `{out_dir}/soa_table.json` — structured JSON with visit-procedure mapping
-
----
-
-## Step 1B-Vision — Vision-Based Table Extraction (FALLBACK)
-
-**Purpose**: FALLBACK for cells where Camelot detects the table structure but misses cell content (especially footnote superscripts). Also used for protocols where Camelot's lattice mode fails (no clear table lines). Convert protocol PDF pages to high-resolution images and use Claude's multimodal vision to extract structured table data.
-
-**Why this step exists**: pdfplumber extracts PDF text character-by-character without spatial context. When a SoA table row reads `X13 X14 X X X`, the LLM cannot tell which column each X belongs to. Vision-based extraction sees the table as a human does — with clear column boundaries — and correctly maps marks to their columns.
-
-**Dependencies**: `pymupdf` (`pip install pymupdf --break-system-packages -q`)
-
-**Implementation**:
-
-```python
-import fitz  # pymupdf
-import os
-import sys
-sys.path.insert(0, os.path.dirname(__file__))
-from vision_table_extractor import extract_page_as_image, extract_soa_multipass
-
-pdf_path = "protocol.pdf"
-img_dir = "{out_dir}/page_images"
-os.makedirs(img_dir, exist_ok=True)
-
-doc = fitz.open(pdf_path)
-
-# Normal pages: 300 DPI
-zoom_normal = 300 / 72
-mat_normal = fitz.Matrix(zoom_normal, zoom_normal)
-
-for i in range(len(doc)):
-    page = doc[i]
-    pix = page.get_pixmap(matrix=mat_normal)
-    pix.save(f"{img_dir}/page_{i+1:03d}.png")
-doc.close()
-
-# SoA/table pages: 450 DPI with multi-pass (full + left half + right half)
-soa_pages = [p for section in manifest["section_map"]["SOA"] for p in range(section["pages_approx"][0], section["pages_approx"][1] + 1)]
-multipass_images = extract_soa_multipass(pdf_path, soa_pages, "{out_dir}", dpi=450)
-# This generates page_NNN.png (450 DPI full), page_NNN_left.png, page_NNN_right.png for each SoA page
-```
-
-**DPI Configuration**:
-- **Normal pages**: 300 DPI (sufficient for text-heavy sections)
-- **SoA/table pages**: 450 DPI (higher resolution captures small X marks in narrow columns)
-- The 450 DPI upgrade specifically targets wide tables where narrow columns cause vision to miss marks
-
-**Which pages to process with vision**: All pages identified as containing tables by pdfplumber's `find_tables()`, PLUS all pages in `manifest.section_map.SOA` range (including footnote pages).
-
-**Multi-Pass Vision Extraction (CRITICAL for wide tables)**:
-
-For SoA table pages, perform THREE vision passes per page:
-1. **Full page** at 450 DPI — reads the complete table for overall structure
-2. **Left half** (55% crop from left) at 450 DPI — higher effective resolution for left columns
-3. **Right half** (55% crop from right) at 450 DPI — higher effective resolution for right columns
-
-The 10% center overlap (55% + 55% = 110%) ensures columns near the middle appear in BOTH half-crops, enabling cross-validation.
-
-For each pass, read the image using the Read tool and extract the procedure × visit grid independently. Then merge the three results using `merge_multipass_results()` from `vision_table_extractor.py`.
-
-**Merge Strategy — Majority Voting with Region-Based Tie-Breaking**:
-1. For each procedure × visit cell, collect votes from all 3 passes
-2. If 2+ passes agree cell has X → mark as X (use the most detailed value with footnotes)
-3. If 2+ passes agree cell is empty → mark as empty
-4. If tie (1 yes, 2 no):
-   - Left region columns (first 45%) → trust left-half pass
-   - Right region columns (last 45%) → trust right-half pass
-   - Center overlap columns (middle 10%) → trust full-page pass
-5. All conflicts are logged in `{out_dir}/multipass_conflicts.json` for audit
-
-**Save outputs**:
-- `{out_dir}/multipass_conflicts.json` — all tie-break decisions with evidence
-- `{out_dir}/vision_SOA_table_full.json` — full-page extraction result
-- `{out_dir}/vision_SOA_table_left.json` — left-half extraction result
-- `{out_dir}/vision_SOA_table_right.json` — right-half extraction result
-- `{out_dir}/vision_SOA_table.json` — MERGED result (this is the PRIMARY source)
-
-**Single-Pass Vision Extraction**:
-
-For each pass (full, left, right), read the page image using the Read tool and visually identify:
-1. Column headers (visit names: S-I, S-II, V1, V2, V3, V4, V5, V6, UNS)
-2. Row labels (procedure names)
-3. Cell contents (X marks, footnote superscripts, empty cells)
-
-Build a structured mapping:
-```json
-{
-  "source": "vision-based extraction from page images",
-  "columns": ["S-I", "S-II", "V1", "V2", "V3", "V4", "V5", "V6", "UNS"],
-  "procedures": {
-    "Safety laboratory assessment": {
-      "S-I": "X13", "V3": "X14", "V4": "X", "V5": "X", "V6": "X"
-    },
-    "Vital signs": {
-      "S-I": "X9", "V1": "X10", "V2": "X10", "V3": "X10", "V4": "X", "V5": "X", "V6": "X", "UNS": "X"
-    }
-  }
-}
-```
-
-**Vision extraction — Other tables**: Also extract any other structured tables found in the protocol:
-- Eligibility criteria tables (Section 8)
-- Lab panel tables (Section 13)
-- AE severity/causality tables (Section 14)
-- Concomitant therapy tables (Section 11)
-- Statistical tables (Section 15)
-
-**Save outputs**:
-- `{out_dir}/page_images/` — all page PNG files (300 DPI normal, 450 DPI for SoA + left/right crops)
-- `{out_dir}/vision_SOA_table.json` — MERGED multi-pass SoA grid (PRIMARY source)
-- `{out_dir}/vision_SOA_table_full.json` — full-page extraction result
-- `{out_dir}/vision_SOA_table_left.json` — left-half extraction result
-- `{out_dir}/vision_SOA_table_right.json` — right-half extraction result
-- `{out_dir}/multipass_conflicts.json` — all merge conflicts and resolution decisions
-- `{out_dir}/vision_footnotes.json` — all SoA footnotes from vision
-- `{out_dir}/vision_corrections.json` — any corrections vs pdfplumber text
-
-**Fallback**: If pymupdf is not available or image extraction fails, proceed with pdfplumber text extraction only (Step 1B below) with extra caution on the Edge-Column Bias Check.
-
----
-
-## Step 1B-ColDetect — Column Boundary Detection
-
-**Purpose**: Use the PDF's vector line drawings (table grid lines) to detect exact column boundaries at pixel level. Then verify that each X mark from vision extraction falls within the correct column. This catches "column drift" — where superscript footnotes (X²²'²³) or merged cells shift text visually into an adjacent column.
-
-**Dependencies**: `pymupdf` (already installed for vision step)
-
-**Implementation**:
-
-```python
-# Run the column boundary detection script
-python3 scripts/vision_table_extractor.py \
-  --pdf protocol.pdf \
-  --pages 22,23,24 \
-  --out {out_dir}/
-```
-
-**Verification process**:
-
-After running `vision_table_extractor.py`, load both the vision-extracted table (`vision_SOA_table.json`) and the column detection results (`column_detection.json`). For each procedure row:
-
-1. Get the X mark positions from `extract_text_with_positions()` — these have exact x-coordinates
-2. Get the column boundaries from `detect_table_lines()` — these have exact column edges
-3. For each X mark, compute which column it falls in by checking `col_left ≤ text_center_x ≤ col_right`
-4. Compare the column assignment to what the vision extraction reported
-5. If they disagree, the column boundary detection is MORE RELIABLE (it uses the actual table grid lines)
-
-**Critical correction pattern**: When a text item like "X²²'²³" has its center x-coordinate at position 520, and column boundaries are:
-- V4: 480–540
-- V5: 540–620
-
-If the center is at 520, it's in V4. But if the center is at 545, it's in V5. The superscript "²²'²³" makes the text wider, which can shift the center rightward.
-
-**Correction rules**:
-- When column detection disagrees with vision extraction, produce a `vision_corrections.json` that lists every correction with evidence:
-  ```json
-  {
-    "corrections": [
-      {
-        "procedure": "MRI modality",
-        "vision_said": "V4",
-        "column_detection_says": "V5",
-        "text_center_x": 545,
-        "column_V4_range": [480, 540],
-        "column_V5_range": [540, 620],
-        "verdict": "CORRECT_TO_V5",
-        "confidence": "HIGH"
-      }
-    ]
-  }
-  ```
-- Apply all HIGH confidence corrections to `vision_SOA_table.json` before passing it to the ontology builder
-
-**Save outputs**:
-- `{out_dir}/column_detection.json` — raw column boundaries and text positions
-- `{out_dir}/vision_corrections.json` — corrections applied (updated with column evidence)
-
----
-
-## Step 1B — SoA Ontology
-
-**Purpose**: Read SoA table pages from manifest, produce `ontology.json`. When vision-extracted data is available (from Step 1B-Vision), use it as the PRIMARY source for the procedure × visit grid. Fall back to pdfplumber text only when vision data is unavailable.
-
-**PDF pages to read**: All pages listed in `manifest.section_map.SOA[*].pages_approx` plus 2 buffer pages after the last one (for footnotes).
-
-**LLM prompt** (when vision data is available, include it):
-```
-Read the Schedule of Activities table in the following protocol pages.
-It is a matrix where rows are procedures and columns are visits.
-
-[PROTOCOL PAGES]
-{soa_pages_text}
-[END]
-
-[VISION-EXTRACTED TABLE — use this as PRIMARY source of truth for procedure × visit mapping]
-{vision_soa_table_json_if_available}
-[END VISION DATA]
-
-Extract the complete SoA structure. Return JSON:
-{
-  "soa_section_title": "exact title",
-  "marker_legend": {
-    "X": "meaning (e.g. required, recorded in database)",
-    "S": "meaning if present, else null"
-  },
-  "epochs": ["Screening", "Treatment", "Follow-up"],
-  "visits": [
-    {
-      "visit_id": "V_S1",
-      "original_label": "S-I",
-      "epoch": "screening|treatment|follow_up|end_of_study|unscheduled",
-      "day_reference": "Day -45 to 0",
-      "window": "±3 days or null",
-      "is_treatment_day": false
-    }
-  ],
-  "procedures": [
-    {
-      "procedure_id": "PROC_VITALS",
-      "canonical_name": "Vital signs",
-      "original_label": "exact row label",
-      "category": "physical_assessment|laboratory|intervention|questionnaire_pro|administrative|other",
-      "required_at": ["V_S1", "V_V1"],
-      "source_only_at": [],
-      "footnote_numbers": ["9", "10"]
-    }
-  ],
-  "footnotes": {
-    "9": "full verbatim footnote text",
-    "10": "full verbatim footnote text"
-  },
-  "cross_visit_rules": ["any timing/washout/sequencing rules in SoA section text"]
-}
-
-Rules:
-- Do NOT invent visits or procedures — only what is in the table
-- required_at / source_only_at must reference visit_id values you defined
-- footnotes: include COMPLETE verbatim text — never truncate
-- EDGE-COLUMN BIAS CHECK: PDF text extraction destroys column positioning. X marks
-  near the first and last columns are most prone to misalignment. For each procedure:
-  1. Count the total X marks you see in that row (including marks that wrapped to the
-     next line or are separated by whitespace)
-  2. Verify that count equals len(required_at) + len(source_only_at)
-  3. If the count does NOT match, re-examine which columns the marks belong to —
-     pay special attention to the FIRST column and LAST 2 columns
-  4. If alignment is ambiguous (e.g. line-wrapped rows), use the procedure's footnotes
-     to resolve: a footnote saying "at all visits" means every column gets an X
-- Return ONLY the JSON
-```
-
-**Post-processing: Footnote Cross-Validation (Fix 1)**
-
-After the LLM returns the ontology JSON, run a second LLM pass to cross-validate
-`required_at` lists against footnote semantics. This catches column-alignment errors
-from PDF text extraction where X marks lose positional anchoring.
-
-**Footnote cross-validation prompt**:
-```
-You are a clinical trial protocol expert validating a Schedule of Activities ontology.
-
-The ontology below was extracted from a PDF SoA table. PDF text extraction destroys
-column alignment, so the `required_at` lists may have errors — especially for the
-FIRST visit column and LAST 1-2 visit columns, which are most prone to edge-alignment
-mistakes.
-
-ONTOLOGY:
-{ontology_json}
-
-CROSS-VALIDATION RULES:
-1. For each procedure, read its associated footnotes (from the footnotes dict).
-   - If a footnote says "at all visits", "at all on-site visits", "at every visit",
-     "each visit", or similar universal language → verify that required_at includes
-     ALL visits (or all on-site visits excluding phone/remote visits).
-   - If a footnote says "before [another procedure]" or "prior to [questionnaires]"
-     → verify that required_at includes every visit where that other procedure occurs.
-   - If a footnote describes a condition that logically applies at additional visits
-     (e.g. "accountability" implies end-of-study reconciliation), flag those visits
-     as potentially missing.
-
-2. Count the total X/check marks you see per procedure row in the raw SoA text.
-   Compare that count to len(required_at). If they don't match, the alignment is wrong.
-
-3. For each procedure, check clinical logic:
-   - Drug accountability/dispensation → must include End of Study visit (final return)
-   - Pre-questionnaire scripts → must include every visit with questionnaire/PRO procedures
-   - Informed consent → must include first screening visit at minimum
-   - AE collection → must include all visits from first dose onward
-
-Return JSON:
-{
-  "validation_status": "PASS|HAS_CORRECTIONS",
-  "corrections": [
-    {
-      "procedure_id": "PROC_XXX",
-      "canonical_name": "...",
-      "issue": "description of what's wrong",
-      "current_required_at": ["V_S2", "V_V1", ...],
-      "corrected_required_at": ["V_S1", "V_S2", "V_V1", ...],
-      "evidence": "Footnote N says '...' which implies visit V_S1 should be included"
-    }
-  ]
-}
-Return ONLY the JSON.
-```
-
-**Action**: If corrections are found, apply them to the ontology JSON before saving.
-Log all corrections in `{out_dir}/ontology_corrections.json` for audit trail.
-
-**Save output**: `{out_dir}/ontology.json`
-
----
-
-## Step 2 — KRI Extraction (per category)
-
-**Purpose**: Extract all KRIs for one domain category. Run 5 times (once per category).
+**Purpose**: Extract all KRIs for one domain category using competing models.
 
 **PDF pages to read**: Pages from `manifest.section_map[CATEGORY]` entries.
+
+**Multi-model extraction process:**
+
+For each domain, run TWO sets of agents in parallel:
+
+**Set A — Claude agents (5 agents via Claude Code subagents):**
+Standard extraction using the prompts below. Each agent runs as a Claude subagent with slightly different temperature/sampling.
+
+**Set B — Gemini agents (5 agents via `scripts/gemini_extract.py`, multi-turn with native PDF ingestion):**
+
+Gemini agents use `run_gemini_extraction_multi_turn()` — a multi-turn chat method with the PDF uploaded via Gemini's Files API. Each of the 5 parallel agents runs a sequence of focused sub-area turns defined per domain. This matches Claude agents' iteration capability (Agent tool) and was validated to reach Claude parity: ELIG 46 vs 43, SAF 37 vs 32, END 42 vs 40, OPS 75 vs 70.
+
+```python
+from gemini_extract import run_gemini_extraction_multi_turn, save_gemini_results
+
+# Uses the default SUB_AREA_TURNS template for the domain (see below).
+results = run_gemini_extraction_multi_turn(
+    domain="{CATEGORY}",              # "ELIG", "SAF", "END", or "OPS"
+    pdf_path="/path/to/protocol.pdf",
+    n_agents=5,
+)
+save_gemini_results(results, out_dir, "{CATEGORY}")
+```
+
+**Why multi-turn with PDF (vs. the original single-shot text prompt)**:
+
+On the original `run_gemini_extraction()` method, Gemini self-limits its output on large domain prompts, producing 13-16 KRIs on OPS (75KB prompt) vs. Claude's 60-82. The root cause is NOT a token budget issue (thinking and output tokens are separate in Gemini 2.5+) — it is that Gemini makes one broad pass and decides to stop, while Claude agents iterate via their tool access.
+
+The multi-turn method gives Gemini the same iteration capability: one chat session per agent, each with the PDF attached, stepping through the domain's sub-areas one turn at a time. The focused turns force exhaustive coverage within each sub-section instead of a single self-limiting pass.
+
+**Per-domain sub-area turn templates** (defined in `gemini_extract.py::SUB_AREA_TURNS`):
+
+| Domain | Turns | Coverage |
+|--------|-------|----------|
+| **ELIG** | 2 | 1) Inclusion criteria (§4.1), 2) Exclusion criteria (§4.2) |
+| **SAF** | 5 | 1) AE/SAE reporting (§8), 2) Stopping rules & IP discontinuation (§9), 3) Solicited AEs & infusion monitoring, 4) DILI thresholds (Hy's law), 5) Causality & pregnancy |
+| **END** | 5 | 1) Primary + key secondary endpoints, 2) Secondary clinical efficacy endpoints, 3) Biomarker/analyte endpoints, 4) Exploratory endpoints, 5) Governance (populations, sample size, DMC, interim analysis) |
+| **OPS** | 6 | 1) IP Handling & Administration (§7), 2) Blinding & Unblinding, 3) Randomization & Study Design, 4) Procedure Methodology (§6), 5) Documentation & Regulatory, 6) Appendices |
+
+**Scope**: This applies to Phase 2 domain extraction of ELIG / SAF / END / OPS. SOA is OUT OF SCOPE for this skill (handled by `soa-kri-extractor`). Claude agents are unchanged.
+
+**Backward compatibility**: The original `run_gemini_extraction()` (single-shot, inline text prompt, no PDF) remains available for non-Phase-2 uses — for example, Step 3B accuracy judging and Step 3.5 orphan scan, where a single-shot call is appropriate.
+
+**Custom sub-area turns**: Callers can override the default template by passing `sub_area_turns=[(name, prompt), ...]` explicitly. This is useful for protocol-specific focus (e.g., adding a turn for a unique appendix) without modifying the skill defaults.
+
+**Adjudication (after both sets complete) — consensus-based, per domain:**
+
+Merge all 10 agent outputs (5 Claude + 5 Gemini). For each unique KRI found across agents, count how many agents produced it (match by semantic similarity of `rule_for_llm`):
+
+| Agent consensus | Action |
+|---|---|
+| **7–10 agents (T1)** found it | **Auto-approve** — goes directly into the domain's golden set |
+| **4–6 agents (T2)** found it | **Step 2.6 auto-judgment** — 6-judge neutral panel (3 Claude + 3 Gemini) pre-decides accept / reject / flag. In `--auto-approve-unanimous` mode (default ON), flagged items default to rejected at Phase 4 and surface in `flagged_review_decisions.json` (Step 4A-FlaggedReview) for end-of-run user review. In `--interactive` mode, pipeline pauses per-domain on flagged items. See the Step 2.6 section in SKILL.md for full spec. |
+| **1–3 agents (T3)** found it | **Tier 3 promotion pipeline** (T3-1 Coverage / T3-2 Verbatim / T3-2.5 Atomicity / T3-3 Panel / T3-4 Aggregate — same 6-judge panel as T2). NOT auto-deleted. Dispositions recorded in `{domain}_tier3_filtered.json`. |
+
+**Decision table format (shown to user for 4–6 agent KRIs):**
+
+For each KRI in the 4–6 range, present:
+
+```
+┌──────────────┬─────────────────────────────────┬─────────────────────────────────────────┬───────────────────┬──────────┬──────────────────────────────┬──────────┐
+│ KRI ID       │ KRI Name                        │ Description                             │ Agents            │ Verified │ Reference & Quote            │ Decision │
+├──────────────┼─────────────────────────────────┼─────────────────────────────────────────┼───────────────────┼──────────┼──────────────────────────────┼──────────┤
+│ SAF-AE-007   │ SAE Reporting 48h Window        │ Monitors SAE reporting within 48 hours  │ 5/10 (3C + 2G)   │ YES      │ Section 8.14, p.118 — "..."  │ ?        │
+│ SAF-STOP-003 │ CK >10x ULN Stopping Rule      │ Monitors CK elevation stopping trigger  │ 4/10 (2C + 2G)   │ YES      │ Section 8.5, p.105 — "..."   │ ?        │
+│ SAF-PREG-002 │ Male Partner Contraception      │ Monitors partner contraception require. │ 6/10 (4C + 2G)   │ NO       │ Section 4.1, p.55 — "..."    │ ?        │
+└──────────────┴─────────────────────────────────┴─────────────────────────────────────────┴───────────────────┴──────────┴──────────────────────────────┴──────────┘
+```
+
+Where:
+- **Agents**: total count + breakdown (e.g., "5/10 (3C + 2G)" = 3 Claude + 2 Gemini)
+- **Description**: 1-2 sentence description of what this KRI monitors and why it matters
+- **Verified**: YES if the supporting quote was found verbatim on the cited protocol page via pdfplumber, NO otherwise
+- **Reference & Quote**: the `combined_ref` field (protocol reference + verbatim quote)
+- **Decision**: user fills in — approve or reject
+
+**Process per domain:**
+1. Run 10 agents → merge → apply consensus tiers
+2. Present the 4–6 tier decision table to the user
+3. **WAIT** for user approval/rejection on each row
+4. Apply user decisions
+5. Proceed to de-duplication within this domain
+6. Only then move to the next domain
+
+**Domain processing order**: ELIG → SAF → END → OPS (one at a time, user approval between each).
+
+Save adjudication results in `{out_dir}/{cat}_adjudication.json`.
 
 **KRI schema** (every KRI must match exactly):
 ```json
 {
-  "kri_id": "SOA-V1-001",
-  "kri_name": "V1- IMP administration",
+  "kri_id": "SAF-AE-001",
+  "kri_name": "SAE reporting within 24h",
   "description": "1-2 sentences: what this monitors and why",
-  "category_id": "SOA",
-  "category_label": "Schedule of Activities",
-  "rule_for_llm": "V1- Verify that [exact actionable check]",
-  "protocol_reference": "Section 9.2, Page 52: \"verbatim quote ≤30 words\"",
-  "additional_footnotes": "Footnote 10: verbatim text — or null"
+  "category_id": "SAF",
+  "category_label": "Safety & Toxicity",
+  "rule_for_llm": "Verify that [exact actionable check]",
+  "protocol_reference": "Section 9.2, p.52",
+  "supporting_quote": "Verbatim text from protocol — no outer quotes",
+  "combined_ref": "Section 9.2, p.52 — \"Verbatim text from protocol\"",
+  "additional_footnotes": "Footnote 10: verbatim text — or null",
+  "severity": "critical|major|minor"
 }
 ```
 
+**Atomicity rule**: Every KRI must be atomic — ONE verifiable check about ONE thing at ONE time point. Never combine multiple endpoints, analytes, criteria, or time points into a single KRI.
+
 **ID format by category**:
-- SOA: `SOA-{VISIT_CODE}-{NNN}` e.g. `SOA-S1-001`, `SOA-V1-001`, `SOA-CROSS-001`
 - ELIG: `ELIG-INC-{NNN}` and `ELIG-EXC-{NNN}`
 - SAF: `SAF-AE-{NNN}`, `SAF-ALLERGY-{NNN}`, `SAF-PREG-{NNN}`, `SAF-RM-{NNN}`, `SAF-STOP-{NNN}`
-- END: `END-PRI-{NNN}`, `END-KSEC-{NNN}`, `END-SEC-{NNN}`, `END-EXP-{NNN}`, `END-ASET-{NNN}`, `END-STAT-{NNN}`, `END-ICE-{NNN}`
+- END: `END-PRI-{NNN}` (primary), `END-KSEC-{NNN}` (key secondary), `END-SEC-{NNN}` (other secondary), `END-BIO-{NNN}` (biomarker), `END-HCRU-{NNN}` (health care resource utilization), `END-EXP-{NNN}` (exploratory)
+- GOV: `GOV-POP-{NNN}` (analysis populations), `GOV-INT-{NNN}` (interim analysis/alpha), `GOV-END-{NNN}` (study end), `GOV-DMC-{NNN}` (DMC rules)
 - OPS: `OPS-IMP-{NNN}`, `OPS-BLIND-{NNN}`, `OPS-RECS-{NNN}`, `OPS-COMP-{NNN}`
 
-### 6-Step SOA Extraction Process
-
-The SOA extraction follows a strict 6-step process using the Camelot CSV as ground truth:
-
-**Step SOA-1 — Visit Mapping**: Parse `soa_table.json` to extract all visits with their timing (week numbers). Establish canonical naming conventions (V0, V1, V2... V20, EDC_EOS). From this point forward, use ONLY these names in all KRIs.
-
-**Step SOA-2 — Table Verification**: Compare the Camelot `soa_table.csv` against the PDF page image for verification. Flag any cells where Camelot shows empty but the image shows X (footnote superscript issue). Save the verified matrix.
-
-**Step SOA-3 — Check-in KRIs**: For each visit, create ONE check-in KRI (SOA-CHECKIN-{VID}) verifying the subject attended within the protocol-specified timing window. Include: visit window (±days), fasting requirements, scheduling constraints.
-
-**Step SOA-4 — Procedure KRIs**: For each visit, create:
-- ONE procedure-list KRI (SOA-PROC-{VID}) listing ALL procedures required at that visit in the format: `V1 - procedure name`
-- ONE KRI per procedure × visit cell (SOA-{VID}-{procedure}) with the specific check
-
-**Step SOA-5 — Footnote Enrichment**: After table-based KRIs are complete, read all protocol footnotes and:
-- Enrich each procedure KRI with relevant footnote details
-- Create **cross-visit rule KRIs** (SOA-CROSS-*) for protocol-wide rules:
-  - Fasting requirements (≥10h before blood draws, exceptions for CK/LFTs/pregnancy)
-  - IP dosing window (1 day before to 4 days after scheduled date)
-  - Lipid/ADA/PK/PCSK9 10-day post-dose rule
-  - IP injection sequence (only after blood draws + physical exam)
-  - Missed visit contact escalation (phone → email → text → letter → certified mail)
-  - EDC retention team notification
-  - EOS safety follow-up period (typically 28-40 days post-last-dose)
-  - V5/baseline observation period for IP administration
-  - Visit-specific special rules from footnotes
-
-**Step SOA-6 — Self-Verification**: Cross-check that every X cell in the Camelot CSV has a corresponding KRI. Report: `N/N cells covered = 100%`. Flag any gaps.
-
-### SOA prompt
-```
-Extract Schedule of Activities KRIs for the {EPOCH} epoch.
-Protocol: {protocol_id}
-Visits in scope: {visit_ids}
-
-ONTOLOGY VISITS:
-{visits_json}
-
-ONTOLOGY FOOTNOTES:
-{footnotes_json}
-
-PROTOCOL TEXT:
-{section_text}
-
-EXTRACTION RULES:
-- One KRI per procedure × visit cell where the procedure is required
-- rule_for_llm MUST start with visit prefix: "V1-", "S1-", "All visits-", etc.
-- Visit check-in KRIs: include window (e.g. "within 90 ± 7 days")
-- Treatment visits: vital signs measured TWICE (pre + post injection per footnote)
-- Washout KRIs: say "by checking medication logs and visit timestamps"  
-- Lab KRIs: include ALL specific analytes from the footnote — never "biochemistry panel" alone
-- Vitals KRIs: use exact positioning wording from Section 13.2 / equivalent
-- IMP admin KRIs: include exact dose, volume, route, person who administers, post-injection observation time
-- Include ALL footnote details that apply to that procedure × visit
-- Measurement specs: height/weight KRIs must include units (kg, cm) and preparation
-  (e.g. "shoes removed", "after voiding") when the protocol specifies them
-- Questionnaire recall periods: if a PRO instrument has a recall period (e.g. "past week",
-  "last 2 weeks"), include it in rule_for_llm — check the appendix/instrument description
-- Procedure sequencing: if footnotes specify procedure order or prerequisites (e.g.
-  "WOMAC performed second, immediately after placebo script"), include sequencing in
-  rule_for_llm
-- Non-drug therapies: when protocol tracks "medications AND non-drug therapies",
-  capture both explicitly — do not collapse into "medications" alone
-- Stability windows: if concomitant therapy must be stable for N weeks/months prior,
-  include the stability duration in the rule
-- Visit window KRIs (MANDATORY — every visit and screening):
-  For EVERY visit in the SoA table — including all screening visits (S-I, S-II, etc.),
-  all treatment visits (V1, V2, V3, etc.), and all follow-up visits (V4, V5, V6/EOS, etc.)
-  — create one dedicated "check-in / within-window" KRI. This KRI verifies that:
-    1. The visit actually occurred
-    2. The visit occurred within the protocol-specified timing window
-  Use the day reference AND window tolerance from the ontology (e.g. "Day -45 to 0",
-  "Day 14 ± 3 days", "Month 3 ± 7 days"). If the protocol specifies an allowed range
-  or deviation window for the visit, embed it in rule_for_llm.
-  Examples:
-    - "S1- Verify that the Screening I visit occurred within the allowed window (Day -45 to Day 0)"
-    - "S2- Verify that the Screening II visit occurred within [N] days after Screening I"
-    - "V1- Verify that the Day 0 treatment visit occurred within the allowed window"
-    - "V2- Verify that the Day 14 treatment visit occurred within 14 ± 3 days of Day 0"
-    - "V4- Verify that the 3-month follow-up visit occurred within 90 ± 7 days of first treatment"
-  If the SoA table or protocol text does not specify a window for a particular visit,
-  still create the check-in KRI using whatever timing reference is available (e.g.
-  "Day -45 to 0" for screening). Never skip a visit — if the protocol has it, it
-  gets a window KRI.
-
-Return ONLY a JSON array starting with [ and ending with ]
-```
-
 ### ELIG prompt
+
+**ATOMICITY**: One criterion or sub-criterion = one KRI. Multi-part criteria (e.g. 14a-14k) must produce one KRI per letter.
+
+**ATOMICITY — compound clauses (refinement)**: Split compound criteria ONLY when BOTH preconditions hold (see SKILL.md "Atomization of compound clauses" for full rules):
+1. Each sub-condition can actually FAIL for some real subject (no always-true clauses like "male or female")
+2. The list is a TRUE ENUMERATION (distinct testable conditions), NOT illustrative examples under an umbrella term
+
+Quick examples:
+- "NASH or HBsAg or HCV antibody or other liver disease" → 4 KRIs ✓ (true enumeration of distinct lab tests)
+- "HBOT or CTP within 30 days" → 2 KRIs ✓ (two distinct interventions)
+- "ALT or AST >3×ULN and/or bilirubin >1.5×ULN" → 3 KRIs ✓ (three distinct lab values)
+- "Pregnant and/or breastfeeding" → 2 KRIs ✓ (two distinct states, each testable)
+- "Males or females ≥18 to <85" → do NOT create a "sex" KRI ✗ (always TRUE — covers all humans); only age is verifiable content
+- "any medication (such as BRMs, cancer immunomodulators, systemic steroids) causing immunosuppression" → ONE KRI ✗ (illustrative examples under umbrella "any medication that causes immunosuppression"; put examples in `description`)
+- "surface area ≥1 cm² and ≤40 cm²" → ONE KRI ✗ (single data field `surface_area_cm2`, one range check)
+
+Verifiability test: (a) can sub-KRI actually fail? (b) does it read a different data field than siblings? BOTH must be YES to split. When in doubt, keep combined.
+
 ```
 Extract Eligibility KRIs from this protocol section.
 Protocol: {protocol_id}
@@ -562,12 +272,42 @@ Return ONLY a JSON array
 ```
 
 ### SAF prompt
+
+**ATOMICITY**: One reporting rule, one stopping rule, one emergency protocol = one KRI. Never combine AE reporting + SAE reporting into one KRI.
+
+**ATOMICITY — compound clauses (refinement)**: Apply the refined compound-clause rule (SKILL.md "Atomization of compound clauses"). Split ONLY when BOTH preconditions hold: (1) each sub-condition can actually fail, (2) it's a true enumeration not illustrative examples. Do NOT split single-field ranges or always-true clauses. Examples: "ALT or AST >3×ULN or bilirubin >2×ULN" → 3 KRIs ✓ (each a distinct lab); solicited AE list (malaise, arthralgia, fever, chills, skin rash, anorexia, nausea, vomiting) → 8 KRIs ✓ (each a distinct named AE); "report SAE within 24h AND follow up within 30 days" → 2 KRIs ✓ (two distinct timeline obligations).
+
 ```
 Extract Safety & Toxicity KRIs from this protocol section.
 Protocol: {protocol_id}
 
 PROTOCOL TEXT:
 {section_text}
+
+══════════════════════════════════════════════════════════════════
+MANDATORY — SAF DOMAIN BOUNDARY (read before extracting anything)
+══════════════════════════════════════════════════════════════════
+SAF contains ONLY rules about:
+  ✓ Numeric safety thresholds and the required clinical response when exceeded
+    (e.g. CK >5× ULN → stop IP; TG ≥600 mg/dL → unscheduled visit; AST/ALT ≥3× ULN → workup)
+  ✓ AE/SAE collection windows and reporting timelines (report within 24h/48h to sponsor)
+  ✓ IP stopping rules and dose discontinuation triggers
+  ✓ Emergency/rescue protocols with exact drug names and doses
+  ✓ Causality assessment requirements
+  ✓ Pregnancy-related safety follow-up (EDP reporting, neonatal death, partner exposure)
+  ✓ Dose modification rules and their triggers (e.g. IP frequency change after confirmed LDL-C)
+
+SAF does NOT contain — do not extract these into SAF:
+  ✗ "Procedure X was collected at Visit Y" → OUT OF SCOPE (soa-kri-extractor)
+  ✗ Visit timing windows → OUT OF SCOPE (soa-kri-extractor)
+  ✗ How to perform a measurement (position, technique, duration) → belongs in OPS
+  ✗ Equipment standardization (same arm, same cuff) → belongs in OPS
+  ✗ Sample tube type or processing steps → belongs in OPS
+  ✗ IRT registration, record-keeping, IP storage → belongs in OPS
+
+SELF-CHECK before adding each KRI: ask "Is this about a safety THRESHOLD or REPORTING OBLIGATION, 
+or is it about WHEN/HOW something is done?" If when/how → do not add to SAF.
+══════════════════════════════════════════════════════════════════
 
 EXTRACTION RULES:
 - Cover: AE/SAE collection windows, reporting timelines (24h, 48h), allergic reaction 
@@ -584,34 +324,147 @@ EXTRACTION RULES:
 Return ONLY a JSON array
 ```
 
-### END prompt
+### END prompt (TWO sub-categories: Endpoints, Governance)
+
+**IMPORTANT — Atomicity**: Every endpoint, every analyte, and every governance rule gets its own separate KRI. Never combine multiple endpoints or multiple analytes into one KRI. If the protocol lists 15 secondary endpoints, produce 15 KRIs. If it lists 13 biomarker analytes, produce 13 KRIs.
+
+**ATOMICITY — compound clauses (refinement)**: Apply the refined compound-clause rule (SKILL.md "Atomization of compound clauses"). Split ONLY when BOTH preconditions hold: (1) each sub-condition can actually fail, (2) it's a true enumeration not illustrative examples. Do NOT split single-field ranges or always-true clauses. Example: "composite of CV death, MI, stroke, and UA" → 4 component KRIs + 1 composite-definition KRI (each component is a distinct testable event).
+
+**Run the END extraction in TWO passes** to ensure complete coverage:
+
+**Pass 1 — Endpoint Definitions (Sections 2.x / Objectives & Endpoints)**:
 ```
-Extract Endpoints & Statistics KRIs from this protocol section.
+Extract Endpoint Definition KRIs from this protocol section.
 Protocol: {protocol_id}
 
 PROTOCOL TEXT:
 {section_text}
 
-EXTRACTION RULES:
-- Order: primary → key secondary → secondary → exploratory → ICEs → analysis sets → statistics
-- One KRI per endpoint, per ICE type, per analysis set definition
-- Analysis sets: use exact protocol definitions
-  (e.g. ITT = ALL randomized, not just ≥1 dose)
-- Statistical rules: ANCOVA covariates, gatekeeping sequence, alpha levels, 
-  imputation strategy, interim analysis trigger criteria
-- Baseline definitions: general (Day 0 pre-dose) AND endpoint-specific if different
-- ADP-NRS calculation method if applicable
+EXTRACTION RULES — ENDPOINT DEFINITIONS:
+You MUST create ONE SEPARATE KRI for EACH endpoint listed in the protocol.
+Do NOT combine multiple endpoints into one KRI. Do NOT summarize a list of endpoints.
+Every single bullet point, every single analyte, every single composite definition = its own KRI.
+
+- PRIMARY ENDPOINT: One KRI with exact composite definition, time-from-randomization language,
+  and adjudication requirement. kri_id: END-PRI-001. severity: critical.
+
+- KEY SECONDARY ENDPOINTS: One SEPARATE KRI per distinct key secondary endpoint.
+  Each composite endpoint definition is separate. Even if they share a section header,
+  decompose them into individual KRIs.
+  kri_id: END-KSEC-001, END-KSEC-002, etc. severity: critical.
+
+- OTHER SECONDARY / CLINICAL ENDPOINTS: One SEPARATE KRI per individual endpoint.
+  Break out every item in the list: CV death, any MI (fatal+non-fatal), fatal MI,
+  non-fatal MI, any stroke, fatal stroke, non-fatal stroke, hospitalization for UA,
+  hospitalization for CHF, coronary revascularization, CABG, PCI, arterial
+  revascularization, all-cause death — each one = one KRI.
+  kri_id: END-SEC-001, END-SEC-002, etc. severity: major.
+
+- BIOMARKER ENDPOINTS: One SEPARATE KRI per analyte × measurement type.
+  If protocol says "percent change and nominal change in LDL-C at Week 14, and
+  percent change to last available" → that is 3 KRIs for LDL-C alone.
+  If protocol lists 13 analytes for percent change at Week 14 → 13 KRIs.
+  Include the exact visit/week number and measurement method (e.g. "direct measurement").
+  kri_id: END-BIO-001, END-BIO-002, etc. severity: major.
+
+- HCRU (Health Care Resource Utilization) ENDPOINTS: One SEPARATE KRI per HCRU metric.
+  All-cause hospitalizations, CV hospitalizations, ER visits, physician office visits,
+  outpatient rehab visits, 30-day readmissions (all-cause and CV separately) — each = one KRI.
+  Include the specific measures collected (diagnoses, length of stay, discharge disposition).
+  kri_id: END-HCRU-001, END-HCRU-002, etc. severity: minor.
+
+- EXPLORATORY ENDPOINTS: One SEPARATE KRI per exploratory endpoint if any.
+  kri_id: END-EXP-001, etc. severity: minor.
+
+Rule format: "Verify that [the endpoint] is [calculated/defined] as [exact definition from protocol]"
+Every KRI rule must specify: what is measured, from when (e.g. "time from randomization"),
+and the exact definition (e.g. "first adjudicated and confirmed occurrence of...").
+
+Return ONLY a JSON array
+```
+
+**Pass 2 — Governance (Sections 9.x / Interim Analysis, Study Design)**:
+```
+Extract Governance KRIs from this protocol section.
+Protocol: {protocol_id}
+
+PROTOCOL TEXT:
+{section_text}
+
+EXTRACTION RULES — GOVERNANCE:
+One SEPARATE KRI per governance rule.
+
+- ANALYSIS POPULATION DEFINITIONS: One SEPARATE KRI per analysis set.
+  FAS/ITT: exact inclusion criteria (e.g. "all randomized subjects regardless of
+  dose changes, adherence, or discontinuation"). severity: critical.
+  SAS: exact inclusion criteria (e.g. "received at least one dose of randomized
+  study medication"). severity: critical.
+  Any other analysis sets (per-protocol, mITT, etc.): one KRI each.
+  kri_id: GOV-POP-001, GOV-POP-002, etc.
+
+- INTERIM ANALYSIS TRIGGER: Exact conditions that must be met simultaneously.
+  Include event count thresholds (e.g. "75% of 508 subjects with primary endpoint event"),
+  which endpoints must be met, AND conditions. severity: critical.
+  kri_id: GOV-INT-001
+
+- ALPHA SPENDING: Method name (e.g. Heybittle-Peto), exact alpha value (e.g. 0.001),
+  adjustment to final analysis alpha (e.g. 0.00002). severity: critical.
+  kri_id: GOV-INT-002
+
+- STUDY END DEFINITION: Event count target, time-based criterion, whichever-occurs-later
+  logic. severity: major.
+  kri_id: GOV-END-001
+
+- DMC REVIEW RULES: If protocol specifies DMC review triggers (e.g. all-cause death
+  monitoring with Bonferroni adjustment), create a KRI. severity: major.
+  kri_id: GOV-DMC-001
+
+Rule format: "Verify that [population/trigger/rule] is [defined/performed] as [exact spec]"
 
 Return ONLY a JSON array
 ```
 
 ### OPS prompt
+
+**ATOMICITY**: One operational rule = one KRI. IMP storage, IMP handling, blinding, unblinding, retention — each is a separate KRI.
+
+**ATOMICITY — compound clauses (refinement)**: Apply the refined compound-clause rule (SKILL.md "Atomization of compound clauses"). Split ONLY when BOTH preconditions hold: (1) each sub-condition can actually fail, (2) it's a true enumeration not illustrative examples under an umbrella term. Do NOT split single-field ranges or always-true clauses. Example: "IP stored at ≤-80°C and shipped on dry ice" → 2 KRIs (storage temperature and shipment condition are distinct verifiable facts).
+
 ```
 Extract Operations & Compliance KRIs from this protocol section.
 Protocol: {protocol_id}
 
 PROTOCOL TEXT:
 {section_text}
+
+══════════════════════════════════════════════════════════════════
+MANDATORY — OPS DOMAIN BOUNDARY (read before extracting anything)
+══════════════════════════════════════════════════════════════════
+OPS contains:
+  ✓ How to perform assessments (measurement position, technique, duration)
+    e.g. "BP measured sitting, arm supported at heart level, after 5 min rest"
+    e.g. "Weight measured in indoor clothing without shoes"
+    e.g. "Pulse rate measured manually at brachial/radial artery for ≥30 seconds"
+  ✓ Longitudinal standardization (same arm, same cuff, same scale throughout study)
+  ✓ IP storage, handling, dispensing, accountability (temperatures, qualified staff, destruction)
+  ✓ Informed consent documentation, re-consent, surrogate consent
+  ✓ CRF corrections, record retention, delegation of authority logs
+  ✓ Regulatory compliance (IRB approvals, inspection notification, clinical holds)
+  ✓ IP compliance assessment and run-in compliance thresholds
+  ✓ Blinding procedures (one carton at a time, emergency unblinding documentation)
+  ✓ Measurement methodology rules that describe HOW (not WHEN) a procedure is performed
+
+OPS does NOT contain — do not extract these into OPS:
+  ✗ Visit timing windows → OUT OF SCOPE (soa-kri-extractor)
+  ✗ "Procedure X happens at Visit Y" → OUT OF SCOPE (soa-kri-extractor)
+  ✗ IRT registration at visits → OUT OF SCOPE (soa-kri-extractor)
+  ✗ Safety thresholds (CK >5× ULN, TG ≥600 mg/dL) → belongs in SAF
+  ✗ AE/SAE reporting timelines → belongs in SAF
+
+SELF-CHECK before adding each KRI: ask "Is this about HOW something is done (technique,
+standardization, compliance), or is it about WHEN it's done (out of scope — soa-kri-extractor)
+or WHAT threshold triggers a response (SAF)?" Only HOW rules belong in OPS.
+══════════════════════════════════════════════════════════════════
 
 EXTRACTION RULES:
 - Cover: IMP storage conditions (exact temperatures), who handles IMP, who administers,
@@ -620,6 +473,8 @@ EXTRACTION RULES:
   regulatory approvals required, 21 CFR Part 11 compliance
 - Include exact temperature ranges
 - Include exact retention durations (years)
+- Measurement methodology: include ALL standardized measurement technique rules
+  (positioning, timing within visit, equipment requirements, longitudinal consistency rules)
 - Central analyses: cover all central review requirements — imaging (X-ray, MRI),
   lab, ECG — including verification that data was transmitted to the central facility
   and results were reviewed centrally
@@ -635,246 +490,335 @@ Return ONLY a JSON array
 
 ---
 
-## Step 3A — Completeness Check
+## Step 4A-Dedup — Cross-Domain + Intra-Domain Duplicate Detection (mandatory after Step 4A)
 
-**Purpose**: Verify every ontology procedure × visit has a KRI. Run once per category.
+**Purpose**: After all 4 in-scope domains are assembled into `extracted_kris.json`, (a) delete any KRI that is SOA-flavored (last-line safety net for the prompt-level exclusion methodology) and (b) remove cross-domain and intra-domain duplicates.
 
-**For SOA**: Cross-reference `ontology.procedures[*].required_at` against extracted KRI names/visit prefixes.
+**SOA-flavored safety net (FIRST, MANDATORY)**: Before any other dedup logic, scan every KRI in `extracted_kris.json`. If the rule is essentially "procedure happened at visit Y", "visit X within ±N days", "per the SoA table", or any other SOA-flavored pattern → delete with reason `"SOA-flavored — handled by soa-kri-extractor"` and log under `dedup_report.json.cross_domain` with `rule_type: "out_of_scope_soa"`. This is the final enforcement of Domain Boundary Rule 1.
 
-**LLM prompt (SOA)**:
-```
-Check completeness of SOA KRI extraction.
-Protocol: {protocol_id}
+**Cross-domain ownership hierarchy** (between the 4 in-scope domains; higher = wins, lower = deleted if same clinical check exists):
+1. SAF — owns safety thresholds, reporting timelines, stopping rules
+2. OPS — owns measurement technique and operational procedure rules
+3. ELIG — owns inclusion / exclusion criteria
+4. END — owns endpoint definitions and governance rules
 
-EXPECTED COVERAGE (from ontology):
-{procedures_with_required_at}
+**Semantic equivalence**: Within-domain dedup uses semantic matching (not literal string match). Conservative threshold: only flag as duplicate when the two KRIs check the same subject, with the same condition and same threshold values, in the same context. When in doubt, KEEP BOTH and log under `kept_despite_similarity`.
 
-EXTRACTED SOA KRIs:
-{kri_name_and_rule_list}
+**Process**:
 
-For each procedure, check whether a KRI exists for each visit in required_at.
-A KRI covers a procedure×visit if its visit prefix (e.g. V1-, S1-) matches
-and the name/rule refers to that procedure.
-
-Return JSON:
-{
-  "total_expected": N,
-  "total_covered": N,
-  "coverage_pct": 0-100,
-  "gaps": [
-    {
-      "procedure": "canonical_name",
-      "missing_at": ["V_V4", "V_V5"],
-      "severity": "CRITICAL|MODERATE|MINOR",
-      "note": "brief reason"
-    }
-  ]
-}
-
-Severity: CRITICAL = intervention/lab/consent at treatment visit, MODERATE = assessment at follow-up, MINOR = administrative
-```
-
-**For ELIG/SAF/END/OPS**: Simpler coverage check — does each subsection have ≥1 KRI?
-
-**Action**: If CRITICAL gaps found → re-run Step 2 for the affected pages only, merge results.
-
-### Step 3A+ — Clinical Completeness Heuristics (Fix 3)
-
-After the ontology-based completeness check, run an additional heuristic pass that catches
-gaps the ontology itself may have missed (e.g., due to PDF table parsing errors in Step 1B).
-These heuristics are protocol-agnostic and based on universal clinical trial logic.
-
-**Heuristic prompt**:
-```
-You are a clinical trial protocol expert performing a completeness audit.
-Review the extracted KRI set against clinical logic heuristics — these catch gaps
-that the ontology may have missed due to PDF parsing errors.
-
-EXTRACTED SOA KRIs:
-{soa_kri_names_and_rules}
-
-ONTOLOGY VISITS:
-{visits_json}
-
-ONTOLOGY PROCEDURES:
-{procedures_json}
-
-ONTOLOGY FOOTNOTES:
-{footnotes_json}
-
-Apply ALL of the following heuristics. For each, check whether the extracted KRIs
-satisfy the requirement. If not, flag the gap.
-
-HEURISTIC 1 — DRUG/MEDICATION ACCOUNTABILITY AT END-OF-STUDY:
-If any procedure related to "medication accountability", "drug accountability",
-"IMP accountability", "medication return", or "rescue medication accountability"
-exists at treatment or follow-up visits, it MUST also exist at:
-  a) The End-of-Study (EOS) visit — final reconciliation is standard GCP practice
-  b) Any Unscheduled visit type — medication changes can occur at any contact
-Check: is there a KRI for this procedure at the EOS visit? At UNS?
-
-HEURISTIC 2 — PRE-QUESTIONNAIRE PROCEDURES AT ALL PRO VISITS:
-If a procedure is described in any footnote as occurring "before questionnaires",
-"prior to completion of questionnaires", "at all visits", "at all on-site visits",
-or similar universal language, it MUST exist at EVERY visit that has any
-questionnaire/PRO procedure (WOMAC, PGA, EQ-5D, NRS, PHQ-9, WPI, etc.).
-Check: list all visits with questionnaire KRIs. Does the pre-questionnaire
-procedure have a KRI at each of those visits?
-
-HEURISTIC 3 — INFORMED CONSENT AT FIRST CONTACT:
-If an informed consent procedure exists, it MUST include the very first
-screening visit (not only later visits).
-Check: does an ICF/consent KRI exist at the first screening visit?
-
-HEURISTIC 4 — AE COLLECTION FROM FIRST DOSE:
-If AE/adverse event collection KRIs exist, they must cover all visits from
-first treatment dose through the protocol-defined reporting window.
-Check: is there an AE KRI at every visit from first treatment through EOS?
-
-HEURISTIC 5 — CONCOMITANT MEDICATIONS AT ALL VISITS:
-Concomitant medication recording is typically required at every visit.
-Check: does a concomitant medication KRI exist at every visit?
-
-HEURISTIC 6 — SCREENING PROCEDURE SYMMETRY:
-If a procedure exists at a later screening visit but not the first (or vice versa),
-flag it for review — unless the protocol explicitly states the procedure is only
-at one screening visit.
-
-HEURISTIC 7 — VITAL SIGNS AT TREATMENT VISITS:
-If vital signs are measured at treatment visits, check whether both pre-treatment
-and post-treatment measurements are captured (common requirement for IMP infusions/
-injections with observation periods).
-
-HEURISTIC 8 — EDGE-COLUMN FOOTNOTE RECONCILIATION:
-For procedures in the first column (V0/Pre) or last column (EDC/EOS), cross-check
-against footnotes. If a footnote explicitly says a procedure occurs "at EDC/EOS"
-or "at end of study" but the Camelot CSV shows it only at V0 (or vice versa),
-flag the discrepancy. Also check: if a footnote says "will NOT be collected at EDC"
-but the CSV shows X at EDC, flag for removal.
-This catches edge-column swaps where table extraction misattributes marks near
-the left/right edges of wide tables.
-
-HEURISTIC 9 — EPOCH BOUNDARY PLAUSIBILITY CHECK:
-For each procedure, check if it has isolated marks in a different epoch than its
-primary cluster. For example, if a procedure has marks at V5-V20 (treatment)
-but also a single mark at V0 (pre-screening), flag it for review.
-A single isolated mark in a distant epoch is suspicious — verify it against the
-Camelot CSV and protocol text. Exception: procedures clinically expected at
-screening (labs, ICF, eligibility, medical history).
-
-HEURISTIC 10 — CONTIGUOUS COVERAGE GAP DETECTION (run via Python, then validate with LLM):
-Before running the LLM heuristic prompt above, run the Python-based gap detector:
 ```python
-from vision_table_extractor import detect_contiguous_gaps
-import json
+# Pseudocode for Step 4A-Dedup
+SOA_FLAGS = ("at visit", "per soa", "per schedule", "per the soa table",
+             "within ±", "visit window", "visit timing")
 
-with open(f"{out_dir}/ontology.json") as f:
-    ontology = json.load(f)
+# Pass 0 — SOA-flavored safety net
+for kri in extracted_kris:
+    rule = kri.rule_for_llm.lower()
+    if any(flag in rule for flag in SOA_FLAGS):
+        delete(kri, reason="SOA-flavored — handled by soa-kri-extractor",
+               rule_type="out_of_scope_soa")
 
-gap_findings = detect_contiguous_gaps(ontology)
-# Save for audit
-with open(f"{out_dir}/contiguous_gap_findings.json", "w") as f:
-    json.dump(gap_findings, f, indent=2)
+# Pass A — Cross-domain dedup (between the 4 in-scope domains)
+for each pair (kri_a, kri_b) in (SAF, OPS, ELIG, END):
+    if same atomic check AND different domains:
+        keep the one in the owning domain per the hierarchy above
+        delete the other, log under dedup_report.json.cross_domain
+
+# Pass B — Intra-domain dedup
+for each domain:
+    for each pair of KRIs with semantically equivalent rule_for_llm:
+        keep the one with the richer description and more specific protocol reference
+        delete the other, log under dedup_report.json.intra_domain
 ```
 
-For each procedure flagged by Heuristic 10:
-1. The Python function identifies procedures with 5+ visit marks that have suspicious
-   "holes" in their visit sequence (>15% of the range is missing).
-2. For each flagged procedure, RE-READ the SoA table page images at the specific
-   column positions of the missing visits. Use the right-half crop images for right-side
-   columns and left-half crops for left-side columns — these have higher effective resolution.
-3. If the re-read confirms X marks exist at the missing visits, add them to the ontology's
-   `required_at` list for that procedure.
-4. Log all corrections in `{out_dir}/contiguous_gap_corrections.json`.
+**LLM prompt for cross-domain dedup review**:
+```
+You are reviewing assembled KRIs for cross-domain duplicates across the 4
+in-scope domains (ELIG, SAF, END, OPS). SOA is OUT OF SCOPE for this skill
+(handled by soa-kri-extractor). Any SOA-flavored KRI you encounter must be
+deleted with reason "SOA-flavored — handled by soa-kri-extractor".
 
-This heuristic specifically catches the pattern where vision extraction misses X marks
-in intermediate columns of wide tables (e.g., a procedure present at V5-V20 but vision
-only captures V5, V8, V11, V14, V17, V20 — missing the ones in between). Clinical
-procedures rarely skip arbitrary visits in a contiguous range.
+DOMAIN OWNERSHIP RULES:
+- SAF owns: safety thresholds, AE/SAE reporting timelines, stopping rules, clinical responses
+- OPS owns: measurement technique, IP handling, documentation procedures
+- ELIG owns: inclusion / exclusion criteria
+- END owns: endpoint definitions and governance rules
 
-Return JSON:
-{
-  "heuristics_applied": 10,
-  "heuristics_passed": N,
-  "gaps_found": [
-    {
-      "heuristic": "DRUG_ACCOUNTABILITY_AT_EOS",
-      "heuristic_number": 1,
-      "procedure": "Rescue medication accountability",
-      "missing_at_visits": ["V_V6", "V_UNS"],
-      "severity": "CRITICAL|MODERATE|MINOR",
-      "evidence": "Procedure exists at V1-V5 but not V6/UNS. GCP requires final
-                    reconciliation at study end.",
-      "recommendation": "Add KRI for rescue medication accountability at V6 and UNS"
-    }
-  ]
-}
-Return ONLY the JSON.
+KRIs TO REVIEW:
+{all_kris}
+
+For each KRI, determine:
+1. Is it SOA-flavored? → delete with reason "out_of_scope_soa"
+2. Is it a duplicate of another KRI in a different in-scope domain? → keep the owner per the hierarchy
+3. Is it a duplicate of another KRI in the same domain? → keep the richer one
+
+Return JSON array of deletions:
+[{"delete_id": "...", "duplicate_of": "...", "reason": "...", "rule_type": "out_of_scope_soa|cross_domain|intra_domain"}]
 ```
 
-**Action**: For each gap found:
-1. Re-read the relevant protocol pages to confirm the procedure should exist at that visit
-2. If confirmed, generate the missing KRI(s) using the Step 2 SOA prompt for that visit
-3. Add generated KRIs to `raw_SOA.json`
-4. Log all heuristic-generated KRIs in `{out_dir}/heuristic_additions.json` for audit trail
+**Save**: `{out_dir}/dedup_report.json`
 
-**Save output**: `{out_dir}/gaps_report.json` (append heuristic results to ontology gaps)
+Apply all deletions, then re-save `extracted_kris.json` and regenerate the Excel workbook.
 
 ---
 
-## Step 3B — Accuracy Check
+## Step 2.5 — Section Obligation Inventory (MANDATORY, runs after each domain extraction)
 
-**Purpose**: Sample 20 KRIs (4 per category), re-read their source pages, verify faithfulness.
+**Purpose**: After completing extraction for a domain (and before proceeding to Phase 3), scan every sentence in that domain's assigned protocol sections for obligation markers. This catches obligations that all 10 agents missed.
 
-**How to sample**: Take the first 4 KRIs from each `raw_{CAT}.json` that have a parseable page number in `protocol_reference`.
+**Input**: Full text of all protocol sections assigned to this domain (from `manifest.json`) + all KRIs already extracted for this domain.
 
-**For each batch of 5 KRIs**, read their cited PDF pages, then:
+**Process**:
+
+1. **Scan every sentence** in the domain's protocol sections for obligation markers:
+   - Hard obligations: "must", "shall", "is required to", "is prohibited"
+   - Temporal obligations: "within [N] hours/days/weeks", "no later than", "at least [N] days before"
+   - Submission obligations: "submitted to", "reported to", "notified", "communicated to"
+   - Definitional boundaries: "is defined as", "does not include", "is not [X] when", "excludes"
+   - Dose/threshold triggers: "if [condition], then [action]", "≤ [value]", "≥ [value]"
+
+2. **For each obligation sentence found**, check whether it is covered by an existing KRI's `supporting_quote` (via substring match after normalizing whitespace).
+
+3. **Uncovered obligation sentences** → automatically promoted to **Tier 3** for the Tier 3 Promotion Pipeline (Step T3-1 → T3-2 → T3-3 → decision table).
+
+4. **Save artifact**: `{out_dir}/{domain}_obligation_inventory.json`
+
+```json
+{
+  "domain": "SAF",
+  "sections_scanned": ["Section 7.1", "Section 7.2", "..."],
+  "total_obligation_sentences": 84,
+  "covered": 71,
+  "uncovered": 13,
+  "obligations": [
+    {
+      "sentence": "All SAEs must be reported to the sponsor within 24 hours.",
+      "page": 55,
+      "covered_by": "SAF-AE-003",
+      "status": "covered"
+    },
+    {
+      "sentence": "Blood pressure must be measured in the sitting position.",
+      "page": 62,
+      "covered_by": null,
+      "status": "uncovered — promoted to Tier 3"
+    }
+  ]
+}
+```
+
+**Blocking**: Domain processing does not advance to Phase 3 until this artifact is written and all uncovered obligations have entered the Tier 3 pipeline.
+
+---
+
+## Step 2.6 — Auto-Judgment for T2 + T3-Promoted KRIs (MANDATORY, replaces manual decision table)
+
+**Purpose**: Convert the prior manual Phase-2 decision-table gate into an automated pre-decision step so the pipeline can run end-to-end overnight without blocking on per-domain user review. Decides INCLUSION in the Golden Set only — does NOT replace Step 3B accuracy judging (which decides CORRECTNESS post-assembly).
+
+**Script**: `scripts/step2_6_autojudgment.py`
+**Runs after**: Step 2.5 Section Obligation Inventory (per domain).
+**Runs before**: Phase 3 (orphan scan, accuracy judging).
+
+**Input**: `raw_{DOMAIN}.json` with each KRI tagged `agent_count` (1–10).
+
+**4-layer engine per candidate**:
+
+| Layer | Type | Check |
+|---|---|---|
+| Layer 1 — Verification | Deterministic | Verbatim `supporting_quote` + binary `rule_for_llm` + parseable `protocol_reference` |
+| Layer 1.5 — Atomicity | Deterministic | Atomization refinement (rejects always-true clauses, pure definitions) |
+| Layer 2 — Coverage/dedup | Deterministic | Already covered by approved T1 KRI? |
+| Layer 3 — 6-judge panel | LLM | 3 Claude + 3 Gemini vote accept / reject / conditional on each KRI |
+| Layer 4 — Aggregate | Deterministic | ≥5 accept + ≤1 reject → auto_approve · ≥5 reject + ≤1 accept → auto_reject · else → flag |
+
+**Judge prompt**: neutral CRA-framed (same framing as the 10-agent extraction panel). See `scripts/autojudgment_prompts.py`.
+
+**Tier 3 pipeline integration** (T3 KRIs flow through ALL layers):
+  - T3-1 Coverage Filter = Layer 2
+  - T3-2 Verbatim Verification = Layer 1
+  - T3-2.5 Atomicity Check (new) = Layer 1.5
+  - T3-3 6-Judge Panel = Layer 3
+  - T3-4 Aggregate = Layer 4
+
+**Output artifacts** (per domain):
+  - `{domain}_autojudgment_report.json` — full layer-by-layer audit (every candidate, every judge vote + reason).
+  - `{domain}_manual_review_decisions.json` — sectioned table: `auto_approved` / `flagged_for_review` / `auto_rejected`.
+  - `{domain}_tier3_filtered.json` — extended schema: per-KRI disposition with stage + reason (Quality Rule 13 applies).
+
+**CLI flag** `--auto-approve-unanimous` (default ON):
+  - ON: pipeline runs without blocking; flagged items default to rejected at Phase 4, surfaced end-of-run in Step 4A-FlaggedReview for user review + optional re-inclusion.
+  - `--interactive`: pipeline pauses per-domain on flagged items. User resolves every flagged row before advancing.
+
+**Scope**: `--auto-approve-unanimous` affects Step 2.6 ONLY. Step 3.5 orphan scan USER_DECISION items and Step 3B accuracy FLAG items retain their own independent pause behavior.
+
+**Blocking gate**: Phase 3 cannot begin until each domain's `{domain}_autojudgment_report.json` exists. In `--interactive` mode the gate also requires every flagged row to have a user decision. In auto-approve mode the gate shifts forward to Phase 4 (Golden Set won't finalize if user has pending overrides in `flagged_review_decisions.json`).
+
+---
+
+## Step 4A-FlaggedReview — End-of-Run Cross-Domain Flagged Review
+
+**Purpose**: Consolidate every flagged-then-rejected KRI from all 4 in-scope domains into a single user-review table at end of run, so the user reviews everything in one pass rather than per-domain during the run.
+
+**Script**: `scripts/step4a_flagged_review.py`
+**Runs after**: Step 4A-Dedup (last step before Golden Set finalization).
+
+**Artifact**: `flagged_review_decisions.json` (cross-domain, full KRI columns per row). Each row has `user_override` defaulting to null.
+
+**Re-inclusion workflow**:
+  1. User reviews `flagged_review_decisions.json`.
+  2. User sets `user_override: "include"` on any row they want re-added.
+  3. User runs `python scripts/step4a_flagged_review.py --out /path/ --apply-overrides` (re-adds included KRIs to their source domain's `raw_{DOMAIN}.json`).
+  4. User re-runs `python run.py --pdf ... --out ... --from 4a` to regenerate the Golden Set with re-included KRIs.
+
+This decouples overnight pipeline completion from user review. Default behavior preserves the conservative (safer) Golden Set; user expands it post-hoc if needed.
+
+---
+
+## Step 3A — Completeness Check
+
+**Purpose**: For each in-scope domain (ELIG, SAF, END, OPS), verify that every obligation sentence recorded in `{domain}_obligation_inventory.json` (Step 2.5) has at least one KRI whose `supporting_quote` covers it.
+
+**Coverage check**: For each obligation sentence in `{domain}_obligation_inventory.json`, look for a KRI in `raw_{domain}.json` whose `supporting_quote` contains the obligation sentence (substring match after normalization). Uncovered obligations are promoted to Tier 3 via the Tier 3 promotion pipeline.
+
+**Output**: `gaps_report.json` with per-domain `total_expected`, `total_covered`, `coverage_pct`, and the list of uncovered obligations.
+
+**Action**: If any CRITICAL obligation is uncovered after the T3 pathway → re-run Step 2 for the affected pages only and merge results.
+
+### Step 3A+ — H4 SAF Heuristic (single retained heuristic)
+
+After the obligation-inventory completeness check, run one protocol-agnostic heuristic. (The prior H1–H10 heuristics were SOA-flavored — they checked procedure × visit relationships and SoA-table geometry — and were removed when SOA extraction moved to the separate `soa-kri-extractor` skill. Only H4 is retained, retargeted as a SAF heuristic.)
+
+**H4 — Adverse-Event Collection Window**: Verify that `raw_SAF.json` contains at least one KRI defining the AE collection window starting at first IP dose (e.g., "AEs collected from first IP administration through 30 days post-last-dose"). If absent, promote a candidate via the Tier 3 / orphan-scan pathway so the obligation is captured.
 
 **LLM prompt**:
 ```
-Verify accuracy of these KRIs against the protocol text.
+You are a clinical trial protocol expert checking AE-collection-window coverage.
 
-KRIs TO VERIFY:
-{kri_list_with_rule_and_reference}
+Read the SAF KRIs below. Does at least one KRI clearly define when AE collection
+starts and ends (relative to first IP administration and last IP administration)?
 
-PROTOCOL SOURCE PAGES:
-{page_texts}
+SAF KRIs:
+{saf_kri_names_and_rules}
 
-For each KRI verify:
-1. Is rule_for_llm faithful to the protocol?
-2. Are all values correct (thresholds, drug names, doses, timing)?
-3. Is protocol_reference section/page accurate?
-4. Are any critical details missing?
-
-Return JSON array:
-[
-  {
-    "kri_id": "...",
-    "verdict": "CORRECT|IMPRECISE|WRONG",
-    "issue": "specific problem or null",
-    "corrected_rule": "corrected text if IMPRECISE/WRONG, else null",
-    "protocol_evidence": "verbatim quote ≤20 words proving verdict"
-  }
-]
+Return JSON:
+{
+  "h4_covered": true | false,
+  "h4_kri_id": "<id of the covering KRI, or null>",
+  "h4_reason": "<one sentence — either where it is covered, or what is missing>"
+}
 ```
 
-**Threshold**: ≥85% CORRECT → pass. Otherwise fix WRONG/IMPRECISE items and re-verify.
+**Action**: If `h4_covered == false`, scan the protocol's safety / pharmacovigilance section for the AE-collection-window sentence and promote it as an orphan candidate (`ORPH-SAF-{NNN}`) into `raw_SAF.json` for downstream Phase 3 validation.
+---
 
-**Save output**: `{out_dir}/accuracy_report.json`
+## Step 3.5 — Protocol-Wide Orphan Scan (MANDATORY BLOCKING, runs FIRST in Phase 3)
+
+**Purpose**: After Phase 2 completes, scan the entire protocol to find rule-like content that was not captured by any domain extractor. See `SKILL.md` for the full spec — this file mirrors the operational summary.
+
+**Input**: full PDF + `manifest.json` + all `raw_{DOMAIN}.json` files.
+
+**Architecture**: 6-agent cross-model panel — 3 Claude Sonnet 4 + 3 Gemini 2.5 Pro.
+
+**Phase 1 — Primary section sweep (section-by-section)**: For each section in `manifest.json`, each of the 6 agents independently scans the section's full text with the list of existing KRIs already citing pages in that section. Each agent returns candidate orphan rule-like statements.
+
+**Zero-KRI section emphasis** (mandatory): sections where the existing-KRI list is empty are flagged as zero-KRI sections and dispatched with an alternate prompt variant that instructs maximum recall — every rule-like statement is treated as a candidate orphan, no self-filtering, no "too minor" filtering. Per-section coverage (existing-KRI count, zero-KRI flag, candidates flagged) is recorded in `orphan_scan_report.json` under `primary_sweep.section_coverage_audit`. See SKILL.md Step 3.5 full spec for terminology (note: "zero-KRI section" here is distinct from Step 2.5's "uncovered obligations" — different scope).
+
+**Phase 2 — Secondary page sweep (orphan pages only)**: For every PDF page NOT claimed by any section in `manifest.json`, run the same 6-agent scan page-by-page.
+
+**Phase 3 — Consolidation** (high-recall candidate, consensus promotion):
+- ≥4/6 agents → HIGH CONFIDENCE → auto-promote
+- 2–3/6 agents → USER DECISION → escalate, pipeline pauses for response
+- 1/6 agent → LOW CONFIDENCE → NOT dropped silently; logged in `low_confidence_candidates` in the report
+
+**Phase 4 — Cross-check**: adjudication judge checks each promoted candidate against ALL existing KRIs across ALL domains for true-duplicate coverage (atomization splits are NOT duplicates — see dedup section). Covered candidates are dropped with a logged reason.
+
+**Phase 5 — Domain classification & KRI generation**: surviving candidates classified per Domain Boundary Rules. Full KRI records generated with `ORPH-` prefixed IDs and appended to the corresponding `raw_{DOMAIN}.json`.
+
+**Phase 6 — Gating**: Step 3A cannot start until the scan is complete, all user decisions are resolved, cross-check is done, classification is done, and `orphan_scan_report.json` is written. Compliance Monitor enforces this.
+
+**Save output**: `{out_dir}/orphan_scan_report.json` with sections: `_meta`, `primary_sweep`, `secondary_sweep`, `consolidation`, `low_confidence_candidates`, `user_decisions`, `cross_check`, `classification`, `promoted_orphans`.
+
+**Promoted orphans flow through the rest of Phase 3** (3A, 3A+, 3B, 3C, 3D) exactly like Phase 2 KRIs.
+
+---
+
+## Step 3B — Full KRI Accuracy Judging (MANDATORY BLOCKING, 100% coverage)
+
+**Purpose**: Verify the clinical content of EVERY KRI (100% coverage across all domains, including orphan KRIs promoted in Step 3.5) against the protocol. Sampling is NEVER permitted. The prior 20-KRI / 4-per-category sampling approach is replaced and must not be re-introduced. See `SKILL.md` for the full spec — this file mirrors the operational summary.
+
+**Input**: all KRIs across all `raw_{DOMAIN}.json` files + full PDF.
+
+**Architecture — 5-judge cross-model panel per KRI**:
+- C1, C2, C3 → Claude Sonnet 4 (3 independent judges)
+- G1, G2 → Gemini 2.5 Pro (2 independent judges)
+
+**Per-KRI input to each judge**: KRI record + full text of cited page(s) + 1 page before and after.
+
+**The 6 checks each judge runs**:
+1. **C1 Faithfulness** — does `rule_for_llm` say what the protocol says, nothing more, nothing less?
+2. **C2 Specific values** — every threshold, drug, dose, timing window, analyte, day count, percentage, unit matches exactly
+3. **C3 Reference accuracy** — cited section + page is ABOUT the clinical topic (semantic, not substring; catches wrong-page-but-quote-happens-to-appear cases).
+4. **C4 Completeness** — no critical detail the protocol specifies is missing
+5. **C5 Scope accuracy** — population, time-point scope match protocol intent
+6. **C6 Atomicity** — the KRI encodes exactly ONE binary obligation about ONE subject with at most one condition. Compound KRIs (e.g., `LDL-C, Apo B, and TG at Week 14`, multiple obligations in one `rule_for_llm`) FAIL C6. Auto-correction = split into N atomic KRIs and re-judge each split.
+
+**Per-judge verdict JSON**:
+```json
+{
+  "judge_id": "C1",
+  "model": "claude-sonnet-4",
+  "kri_id": "SAF-003",
+  "verdict": "CORRECT | IMPRECISE | WRONG",
+  "failing_checks": ["C2", "C4"],
+  "issue": "specific problem or null",
+  "corrected_rule": "corrected text or null",
+  "protocol_evidence": "verbatim ≤25-word quote proving verdict"
+}
+```
+
+**Consensus adjudication per KRI**:
+- 5/5 CORRECT → PASS
+- 4/5 CORRECT + 1 non-CORRECT → PASS (with dissent logged)
+- 3/5 CORRECT + 2 non-CORRECT → FLAG → user decision, pipeline pauses
+- ≤2/5 CORRECT → FAIL → blocking
+
+**Auto-correction** (IMPRECISE or FAIL):
+1. Collect all `corrected_rule` proposals from judges
+2. If ≥3 judges propose semantically equivalent corrections → merge and apply
+3. **Re-run the full 5-judge panel on the corrected KRI** (mandatory re-verification — never apply without re-verification)
+4. If re-verified at ≥4/5 CORRECT → PASS, log the correction
+5. **C6 atomicity-split correction** (special case): when ≥3 judges flag C6 FAIL with the same atomic-split proposal, split the compound KRI into N atomic KRIs (one per atomic obligation), then re-run the full 5-judge panel on each split KRI. The original compound KRI does not pass; only the split atomic KRIs that themselves achieve ≥4/5 CORRECT pass.
+6. Otherwise → user decision
+
+**Gating** (all must be true before Step 3C can begin):
+- 0 FAIL
+- 0 unresolved FLAG
+- Every IMPRECISE either auto-corrected + re-verified ≥4/5 CORRECT, or explicitly user-accepted
+
+**Batching and cost control**:
+- Group KRIs by cited page → load page text once per run, reuse
+- Batch up to 8 KRIs per LLM call when they share the same page context
+- Parallel workers across domains (4 concurrent: ELIG, SAF, END, OPS)
+- 5 judges per KRI run in parallel, not sequentially
+- Page text cache in memory, keyed by page number
+
+**Save output**: `{out_dir}/accuracy_report_full.json` with sections: `_meta` (including pass_gate boolean), `per_kri` (all 5 judge verdicts + consensus + correction + user decision per KRI), `blocking_issues`, `auto_correction_log`, `user_decisions`.
+
+**Relationship to Step 3D**: 3B checks clinical meaning (semantic); 3D checks verbatim substring (deterministic). Both run. Neither replaces the other. The combination catches both wrong clinical content AND fabricated quotes AND wrong-page-but-substring-match cases.
 
 ---
 
 ## Step 3C — Consistency Check
 
-**Purpose**: Group SOA KRIs by procedure family, check same procedure is consistent across visits.
+**Purpose**: Identify cross-KRI inconsistencies — same clinical concept mentioned in multiple KRIs (e.g., a threshold value referenced in both SAF and OPS, or two ELIG criteria using different units for the same lab) must have consistent values, units, and references.
 
-**Grouping**: Strip visit prefix (`V1- `, `S2- `, etc.) from `kri_name` to get bare procedure name. Group all KRIs with same bare name. Only check families with 3+ members.
+**Grouping**: Cluster KRIs that share a topic keyword (e.g., LDL-C, ALT, GFR, IP storage temperature). Only check clusters with 2+ members.
 
-**For each family**, read cited PDF pages, then:
+**For each cluster**, read the cited PDF pages, then:
 
 **LLM prompt**:
 ```
-Check internal consistency for the "{procedure_name}" procedure across these visits.
+Check internal consistency for the "{topic}" concept across these KRIs.
 
 KRIs:
 {kri_list}
@@ -882,20 +826,19 @@ KRIs:
 PROTOCOL PAGES:
 {relevant_page_text}
 
-Identify inconsistencies where a detail present at some visits is absent from others
-without a visit-specific reason — e.g.:
-- "without shoes" for weight
-- "supine" for vitals  
-- "including CRP/hsCRP" for labs
-- "by checking medication logs" for washout
-- specific drug names in safety procedures
+Identify inconsistencies where a value, unit, threshold, or qualifier present
+in some KRIs is contradicted by others — e.g.:
+- Different ULN multiples for the same lab
+- Different reporting windows for the same event
+- Different unit conventions (mg/dL vs mmol/L) for the same analyte
+- Different definitions for the same population label
 
 Mark differences as intentional only if the protocol explicitly states different
-requirements per visit (e.g. vitals twice on treatment days, once on follow-up).
+requirements per context.
 
 Return JSON:
 {
-  "family": "{procedure_name}",
+  "cluster": "{topic}",
   "overall_status": "CONSISTENT|HAS_INCONSISTENCIES",
   "inconsistencies": [
     {
@@ -924,8 +867,9 @@ Run this Python code to merge all category files:
 import json, re, os
 
 CATEGORY_LABELS = {
-    "SOA": "Schedule of Activities", "ELIG": "Eligibility",
-    "SAF": "Safety & Toxicity", "END": "Endpoints & Statistics",
+    "ELIG": "Eligibility",
+    "SAF": "Safety & Toxicity",
+    "END": "Endpoints & Statistics",
     "OPS": "Operations & Compliance"
 }
 
@@ -935,7 +879,7 @@ def assemble(out_dir, manifest_path):
     
     all_kris, categories_meta = [], []
     
-    for cat in ["SOA", "ELIG", "SAF", "END", "OPS"]:
+    for cat in ["ELIG", "SAF", "END", "OPS"]:
         raw_path = os.path.join(out_dir, f"raw_{cat}.json")
         if not os.path.exists(raw_path):
             continue
@@ -983,31 +927,25 @@ def assemble(out_dir, manifest_path):
 ### Excel output (always generate alongside JSON)
 
 After assembling `extracted_kris.json`, also generate `Extracted_KRIs.xlsx` using openpyxl.
-The Excel workbook must have **5 sheets** matching the golden set format:
+The Excel workbook has one sheet per in-scope domain (ELIG, SAF, END, OPS — 4 sheets) plus a Summary sheet.
 
-| Sheet name | Category | Columns |
-|---|---|---|
-| SOA | Schedule of Activities | KRI Name, Description, category, Rule to Check- for LLM, Referance, Additional Footnotes |
-| ELIGIBILITY | Eligibility | KRI Name, Description, category, Referance, Rule to Check- for LLM |
-| SAF&TOX | Safety & Toxicity | KRI Name, Description, category, Referance, Rule to Check- for LLM |
-| END&STAT | Endpoints & Statistics | KRI Name, Description, Category, Referance, Rule to Check for LLM |
-| OPE&COM | Operations & Compliance | KRI Name, Description, Category, Referance, Rule to Check for LLM |
+**Exact column structure — identical for ALL domain sheets, no deviations:**
 
-**Note**: SOA has 6 columns (includes "Additional Footnotes"), all others have 5.
-The column ORDER matters — SOA puts "Rule" before "Referance", other sheets put "Referance" before "Rule".
+| Column | Field | Width |
+|--------|-------|-------|
+| KRI ID | `kri_id` | 16 |
+| Category | `category_label` | 28 |
+| KRI Name | `kri_name` | 34 |
+| Description | `description` | 52 |
+| Rule for LLM | `rule_for_llm` | 60 |
+| Protocol Reference & Quote | `combined_ref` | 90 |
+
+**No "Domain" column.** No separate "Protocol Reference" column. No separate "Supporting Quote" column. The `combined_ref` field is the single source for the last column.
 
 Formatting:
-- Blue header row with white bold text, frozen at row 1
-- Text wrapping enabled on all cells
-- Column widths: ~35 for name, ~50 for description, ~20 for category, ~55 for rule, ~45 for reference
-
-Map KRI fields to columns:
-- "KRI Name" ← `kri_name` (or `kri_id` if name is missing)
-- "Description" ← `description`
-- "category" ← category label (e.g. "Schedule of Activities")
-- "Rule to Check- for LLM" ← `rule_for_llm`
-- "Referance" ← `protocol_reference`
-- "Additional Footnotes" ← `additional_footnotes` (SOA only, null → empty)
+- Dark blue header row (1F4E79) with white bold text, frozen at row 1
+- Text wrapping enabled on all cells, thin borders
+- Domain-specific row colors: ELIG=FCE5CD, SAF=F4CCCC, END=CFE2F3, OPS=EAD1DC
 
 ```python
 import openpyxl
@@ -1016,13 +954,12 @@ from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 def generate_excel(out_dir, all_kris_by_category):
     """Generate Extracted_KRIs.xlsx matching golden set format."""
     SHEETS = [
-        ("SOA", "Schedule of Activities", True),
         ("ELIGIBILITY", "Eligibility", False),
         ("SAF&TOX", "Safety & Toxicity", False),
         ("END&STAT", "Endpoints & Statistics", False),
         ("OPE&COM", "Operations & Compliance", False),
     ]
-    CAT_MAP = {"SOA": "SOA", "ELIGIBILITY": "ELIG", "SAF&TOX": "SAF",
+    CAT_MAP = {"ELIGIBILITY": "ELIG", "SAF&TOX": "SAF",
                "END&STAT": "END", "OPE&COM": "OPS"}
 
     wb = openpyxl.Workbook()
@@ -1090,7 +1027,7 @@ If they say no, the pipeline is complete.
 **Accepted golden set formats**:
 - JSON file with a `kris` array (same schema as `extracted_kris.json`)
 - JSON file that IS a flat array of KRI objects
-- JSON file with category-level keys (e.g. `{"SOA": [...], "ELIG": [...]}`)
+- JSON file with category-level keys (e.g. `{"ELIG": [...], "SAF": [...]}`). If the golden set also contains a `"SOA"` or `"NDEF"` key, those entries are loaded into a side channel as "out of scope for this skill" and excluded from this skill's comparison score.
 
 Normalize the golden set into a flat list of KRI objects before proceeding.
 
@@ -1219,22 +1156,21 @@ FEW-SHOT EXAMPLES:
              before any study-specific procedures, with copy provided to participant.
   VERDICT: SUPERSET — adds "dated", "copy provided" factual details
 
-[PAIR] SOA-V4-075
-  GOLDEN:    V4- Verify by checking medication logs the participant maintained 48-hour washout.
-  EXTRACTED: V4- Verify that a ≥48-hour washout was observed before pain assessments.
-  VERDICT: EQUIVALENT — same clinical check (48-hour washout at V4). "By checking
-           medication logs" is a data-source detail, not a different requirement. Both
-           rules would cause a CRA to verify the same thing.
+[PAIR] SAF-AE-007
+  GOLDEN:    Verify SAEs are reported to the sponsor within 24 hours of investigator awareness.
+  EXTRACTED: Verify SAEs are reported to the sponsor within 24 hours of awareness.
+  VERDICT: EQUIVALENT — same clinical check (24-hour SAE reporting window). Wording
+           differences are irrelevant; both rules would cause a CRA to verify the same thing.
 
 [PAIR] OPS1
   GOLDEN:    Verify IMP storage logs document ≤ -150°C.
   EXTRACTED: Verify IMP storage logs document ≤ -150°C (or -80°C short-term) in secure area.
   VERDICT: SUPERSET — adds short-term condition and access control
 
-[PAIR] WINDOW
-  GOLDEN:    V2- Verify visit occurred within Day 14 ± 3 days.
-  EXTRACTED: V2- Verify visit occurred within Day 14 ± 7 days.
-  VERDICT: DIVERGENT — factual detail (window tolerance) contradicts
+[PAIR] ELIG-INC-12
+  GOLDEN:    Verify the subject's eGFR is ≥ 30 mL/min/1.73m² at screening.
+  EXTRACTED: Verify the subject's eGFR is ≥ 60 mL/min/1.73m² at screening.
+  VERDICT: DIVERGENT — factual detail (threshold) contradicts
 
 NOW EVALUATE {N} PAIRS. For each pair return:
 {
@@ -1321,7 +1257,7 @@ Merge all per-category results into a single `comparison_report.json`:
   },
   "summary_by_category": [
     {
-      "category": "SOA",
+      "category": "SAF",
       "golden_count": N,
       "extracted_count": N,
       "equivalent": N,
@@ -1334,7 +1270,7 @@ Merge all per-category results into a single `comparison_report.json`:
   ],
   "differences": [
     {
-      "category": "SOA",
+      "category": "SAF",
       "golden_kri_id": "...",
       "extracted_kri_id": "...",
       "verdict": "SUBSET",
@@ -1384,3 +1320,89 @@ After saving the JSON, present a human-readable summary:
    for the most impactful differences (DIVERGENT first, then SUBSET)
 4. **Coverage gaps** — missing and extra KRIs with protocol support status
 5. **Recommendations** — which categories or specific KRIs to fix if score < 80
+
+---
+
+## Step 3D — Full Verbatim Verification (MANDATORY BLOCKING GATE)
+
+**Purpose**: Verify that every KRI's `supporting_quote` is a verbatim substring of the text on its cited protocol page. Deterministic — no LLM. Must reach 100% pass before Step 4A can begin.
+
+**Run**: `python scripts/step3d_verify.py --pdf /path/to/protocol.pdf --json /path/to/extracted_kris.json`
+
+**How it works**:
+1. Load all KRIs from `extracted_kris.json`
+2. Extract all PDF pages into an in-memory cache using pdfplumber
+3. For each KRI:
+   - Parse the page range from `protocol_reference` (handles `p.X`, `p.X-p.Y`)
+   - Search the cited page range ±2 pages for `norm(supporting_quote)` as a substring of `norm(page_text)`, where `norm` collapses all whitespace to single spaces
+   - **PASS**: quote found → save stripped quote and recompute `combined_ref`
+   - **AUTO-CORRECT**: quote found on a different page than cited → update `protocol_reference` and `combined_ref`, log the correction
+   - **FAIL**: quote not found anywhere in range → must be fixed manually
+
+4. Save backup before writing corrected JSON (`extracted_kris.pre_verify.json`)
+5. Write corrected `extracted_kris.json`
+6. Save `{out_dir}/verify_report.json`
+
+**Known PDF quirks to handle**:
+- Curly apostrophes (`\u2019` `'`) vs straight (`'`) — must match the PDF's actual character
+- Private-use characters (e.g., `\uf0b1` for ±) — copy from pdfplumber output, not typed
+- Merged words (e.g., "IPadministration", "14days") — pdfplumber strips spaces at word boundaries in some PDFs
+
+**Fabricated quote = hard failure**: A `supporting_quote` that cannot be found verbatim in the cited page is a **fabricated quote** — a hard pipeline failure. Not a warning, not a soft flag. The pipeline stops immediately. The KRI must be corrected before proceeding. No exceptions.
+
+**Blocking gate**: If `verify_report.json` shows any FAIL, the pipeline stops. Fix each failing KRI (correct the quote or the page reference), then re-run Step 3D until 0 failures. Only then proceed to Step 4A.
+
+**Output — `verify_report.json`**:
+```json
+{
+  "_meta": { "step": "3D", "total": 675, "pass": 675, "auto_corrected": 3, "fail": 0, "gate": "PASS" },
+  "pass": ["ELIG-INC-001", "SAF-AE-001", "..."],
+  "auto_corrected": [
+    { "kri_id": "GOV-INT-002", "old_pg": 47, "new_pg": 48 }
+  ],
+  "fail": []
+}
+```
+
+---
+
+## Step 4D — Comparison Verification (runs after Step 4C)
+
+**Purpose**: Reconciliation pass to reduce false negatives and false positives in the Step 4C comparison report. Catches cases where the LLM comparison judged two semantically equivalent KRIs as DIVERGENT or MISSING due to wording differences.
+
+**Input**: `comparison_report.json` from Step 4C + full `extracted_kris.json` + golden set KRIs.
+
+**Process**:
+
+1. **False-negative scan (MISSING verdicts)**:
+   - For each golden KRI marked MISSING (no extracted match found), search the extracted KRI set for any KRI whose `rule_for_llm` contains the same key terms: procedure name + visit prefix + primary threshold/value (if any)
+   - If a match is found → reclassify as EQUIVALENT or SUBSET (whichever is more precise) and log the correction with the matching extracted KRI ID
+
+2. **False-positive scan (DIVERGENT verdicts)**:
+   - For each pair marked DIVERGENT, re-read both `rule_for_llm` texts and the cited protocol pages
+   - Confirm they truly check different clinical requirements — not just differently worded versions of the same check
+   - If they are the same check worded differently → reclassify as EQUIVALENT
+
+3. **Save output**: `{out_dir}/comparison_verified.json` with all reclassifications and a corrected score.
+
+```json
+{
+  "_meta": {
+    "step": "4D",
+    "original_score": 74.2,
+    "corrected_score": 81.5,
+    "reclassifications": 9
+  },
+  "reclassifications": [
+    {
+      "kri_id_golden": "ELIG-INC-012",
+      "original_verdict": "MISSING",
+      "corrected_verdict": "EQUIVALENT",
+      "matched_extracted_kri": "ELIG-INC-018",
+      "reason": "Same inclusion criterion, different wording"
+    }
+  ]
+}
+```
+
+**Blocking**: None — Step 4D is a reconciliation pass, not a blocking gate. Its output refines the comparison result but does not gate any subsequent step.

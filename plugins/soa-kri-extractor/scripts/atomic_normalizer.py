@@ -117,15 +117,6 @@ def decompose_visit_label(label):
                 prefix = "V"
         if n2 < n1:
             n1, n2 = n2, n1
-        # Day-prefix ranges (e.g. "Day 12-163") describe a visit WINDOW — a single
-        # visit scheduled anywhere inside that day-range — not a sequence of N
-        # daily visits. SKILL.md's compound-column examples only cover Weeks/Visits
-        # sequences ("W2-11", "V3, V5, V7"), never "Day X-Y". Treat D-ranges as
-        # a single atomic visit. Guard with a hard cap as defense-in-depth.
-        if prefix == "D":
-            return [text], False
-        if (n2 - n1) > 30:
-            return [text], False
         return [f"{prefix}{n}" for n in range(n1, n2 + 1)], True
 
     if "," in text or "/" in text:
@@ -316,7 +307,7 @@ def refine_low_confidence_bindings(grid, footnote_map, client=None):
         return grid
     if client is None:
         try:
-            client = anthropic.Anthropic(timeout=60.0, max_retries=2)
+            client = anthropic.Anthropic()
         except Exception as e:
             print(f"  ⚠ atomic_normalizer.refine: anthropic client init failed ({e}) — skipping LLM refinement.")
             return grid
@@ -356,7 +347,6 @@ def refine_low_confidence_bindings(grid, footnote_map, client=None):
                 model=CLAUDE_MODEL,
                 max_tokens=600,
                 messages=[{"role": "user", "content": prompt}],
-                timeout=45.0,
             )
             fragment = (response.content[0].text or "").strip()
             if fragment.startswith('"') and fragment.endswith('"'):

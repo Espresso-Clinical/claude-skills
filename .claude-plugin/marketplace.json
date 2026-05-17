@@ -63,6 +63,17 @@
       "source": "./plugins/soa-kri-extractor",
       "category": "clinical",
       "keywords": ["clinical", "espresso", "protocol", "soa", "schedule-of-activities", "kri", "extraction", "cra"]
+    },
+    {
+      "name": "amendment-sync",
+      "description": "Syncs an existing Golden Set to a new version of a clinical-trial document (protocol or accompanying doc) by diffing old vs new, locating affected KRIs, and running an interactive change-by-change review — without re-running the full extractor",
+      "version": "1.0.0",
+      "author": {
+        "name": "Espresso Clinical"
+      },
+      "source": "./plugins/amendment-sync",
+      "category": "clinical",
+      "keywords": ["clinical", "espresso", "amendment", "version-sync", "golden-set", "kri", "diff", "interactive-review"]
     }
   ]
 }

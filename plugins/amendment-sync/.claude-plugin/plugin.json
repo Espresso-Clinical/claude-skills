@@ -1,0 +1,11 @@
+{
+  "name": "amendment-sync",
+  "version": "1.0.0",
+  "description": "Syncs an existing Golden Set to a new version of a clinical-trial document (protocol or accompanying doc) by diffing old vs new, locating affected KRIs, and running an interactive change-by-change review — without re-running the full extractor",
+  "author": {
+    "name": "Espresso Clinical",
+    "email": "eng@espressoclinical.com"
+  },
+  "license": "UNLICENSED",
+  "keywords": ["clinical", "espresso", "amendment", "version-sync", "golden-set", "kri", "diff", "interactive-review"]
+}

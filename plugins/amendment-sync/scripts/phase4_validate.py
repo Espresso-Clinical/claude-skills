@@ -23,7 +23,7 @@ from pathlib import Path
 
 
 EXTRACTOR_SCRIPTS = Path(
-    "~/.claude/skills-repo/protocol-kri-extractor/scripts"
+    "~/.claude/skills-repo/plugins/protocol-kri-extractor/scripts"
 ).expanduser().resolve()
 
 
