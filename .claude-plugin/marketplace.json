@@ -74,6 +74,17 @@
       "source": "./plugins/amendment-sync",
       "category": "clinical",
       "keywords": ["clinical", "espresso", "amendment", "version-sync", "golden-set", "kri", "diff", "interactive-review"]
+    },
+    {
+      "name": "golden-set-binary-rule-distiller",
+      "description": "Distills a clinical-trial Golden Set into only the binary, deviation-producing rules with machine-readable rewritten Rule for LLM column, verified against the source protocol PDF",
+      "version": "1.0.0",
+      "author": {
+        "name": "Espresso Clinical"
+      },
+      "source": "./plugins/golden-set-binary-rule-distiller",
+      "category": "clinical",
+      "keywords": ["clinical", "espresso", "golden-set", "kri", "binary", "deviation", "filter", "rule-for-llm", "protocol"]
     }
   ]
 }
