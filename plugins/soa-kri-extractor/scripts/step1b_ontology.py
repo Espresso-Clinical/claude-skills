@@ -114,13 +114,23 @@ Critical rules:
   rules mentioned in the SoA section text (not just the table)
 - Return ONLY the JSON object"""
 
-    print(f"  Calling Claude for ontology ({len(soa_pages)} pages)...")
-    response = client.messages.create(
+    print(f"  Calling Claude for ontology ({len(soa_pages)} pages, streaming)...")
+    with client.messages.stream(
         model="claude-sonnet-4-20250514",
-        max_tokens=8000,
+        max_tokens=32000,
         messages=[{"role": "user", "content": user_prompt}],
-        system=SYSTEM_PROMPT
-    )
+        system=SYSTEM_PROMPT,
+    ) as stream:
+        for _ in stream.text_stream:
+            pass
+        response = stream.get_final_message()
+
+    if getattr(response, "stop_reason", None) == "max_tokens":
+        raise RuntimeError(
+            f"Ontology response truncated (stop_reason=max_tokens). "
+            f"Output tokens used: {response.usage.output_tokens}. "
+            f"Raise max_tokens in step1b_ontology.py or chunk the SoA pages."
+        )
 
     raw = response.content[0].text.strip()
     raw = re.sub(r'^```[a-z]*\n?', '', raw)

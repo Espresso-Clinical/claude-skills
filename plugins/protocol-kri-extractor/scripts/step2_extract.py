@@ -1,53 +1,63 @@
 """
-Step 2 — Per-Section KRI Extraction
-Extracts KRIs from each protocol section identified in the manifest.
+Step 2 — Per-Section KRI Extraction (ELIG / SAF / END / OPS)
+Extracts KRIs from each in-scope protocol section identified in the manifest.
 One LLM call per section group (batched by domain category).
-Produces raw_SOA.json, raw_ELIG.json, raw_SAF.json, raw_END.json, raw_OPS.json.
-Protocol-agnostic — driven entirely by manifest + ontology.
+Produces raw_ELIG.json, raw_SAF.json, raw_END.json, raw_OPS.json.
+
+Schedule of Activities (SOA) is OUT OF SCOPE for this skill — handled by the
+separate `soa-kri-extractor` skill. Every extractor prompt below carries the
+SOA-exclusion methodology block.
+
+Protocol-agnostic — driven entirely by the manifest's section map.
 """
 
 import json, sys, re, os
 import pdfplumber
 import anthropic
 
+# Mandatory SOA-exclusion block injected into every domain extractor prompt.
+SOA_EXCLUSION_BLOCK = """
+
+OUT OF SCOPE — SOA (Schedule of Activities)
+
+Schedule-of-Activities content is handled by the separate `soa-kri-extractor`
+skill. It is OUT OF SCOPE for this extractor. Do NOT emit any KRI whose subject
+is one of the following:
+  - "Procedure X is performed at visit Y" (any procedure × visit cell).
+  - "Visit X must occur within ±N days of [reference]" (visit windows / check-ins).
+  - Any rule that anchors an obligation to a specific visit code (V1, V2, SCR,
+    EDC, EOS, Day 1, Week 4, etc.) and is essentially saying that something
+    *happens* at that visit.
+  - Content from the SoA table itself, its footnotes, or the visit-schedule
+    narrative section.
+  - "Per SOA", "per the Schedule of Activities", "per the SoA table" or
+    equivalent phrasings.
+
+If you encounter SOA-flavored content while extracting your assigned domain
+section, SKIP it. Do not output a KRI for it. The orphan scan (Step 3.5) and
+the cross-domain dedup (Step 4A-Dedup) carry the same exclusion and will drop
+any SOA-flavored KRI that slips through. Stay strictly within your assigned
+domain's content type.
+"""
+
 SYSTEM_PROMPT = """You are a clinical research associate (CRA) and protocol expert.
-You read clinical trial protocol sections and extract monitoring rules as KRIs 
+You read clinical trial protocol sections and extract monitoring rules as KRIs
 (Key Risk Indicators) — actionable verification instructions for site monitoring.
-You always return valid JSON arrays. No markdown fences, no prose."""
+You always return valid JSON arrays. No markdown fences, no prose.""" + SOA_EXCLUSION_BLOCK
 
 KRI_SCHEMA = """Each KRI must have exactly these fields:
 {
-  "kri_id": "CATEGORY-SUBCATEGORY-NNN  e.g. SOA-V1-001, ELIG-INC-001, SAF-AE-001, END-PRI-001, OPS-IMP-001",
-  "kri_name": "Short name, max 8 words, starts with visit code for SOA e.g. V1- IMP administration",
+  "kri_id": "CATEGORY-SUBCATEGORY-NNN  e.g. ELIG-INC-001, SAF-AE-001, END-PRI-001, OPS-IMP-001",
+  "kri_name": "Short name, max 8 words",
   "description": "1-2 sentences: what protocol requirement this monitors and why it matters",
-  "category_id": "SOA|ELIG|SAF|END|OPS",
+  "category_id": "ELIG|SAF|END|OPS",
   "category_label": "full category name",
-  "rule_for_llm": "Actionable CRA instruction starting with visit prefix for SOA (e.g. V1-, S2-, All visits-) or Verify that... for other categories. Be specific: include exact drug names, thresholds, timeframes, data sources (e.g. 'by checking medication logs'), and clinical conditions verbatim from the protocol.",
+  "rule_for_llm": "Actionable CRA instruction starting with 'Verify that...' Be specific: include exact drug names, thresholds, timeframes, data sources (e.g. 'by checking medication logs'), and clinical conditions verbatim from the protocol.",
   "protocol_reference": "Section X.X, Page N: \"verbatim quote ≤30 words from protocol\"",
   "additional_footnotes": "Footnote N: verbatim text — or null if none"
 }"""
 
 CATEGORY_CONFIGS = {
-    "SOA": {
-        "label": "Schedule of Activities",
-        "id_prefix": "SOA",
-        "subcategories": {
-            "screening": "S1, S2 visits",
-            "treatment": "V1, V2, V3 (or equivalent treatment visits)",
-            "followup": "Follow-up and EOS visits",
-            "unscheduled": "Unscheduled visits",
-            "cross_visit": "Rules spanning multiple visits"
-        },
-        "instructions": """Extract one KRI per procedure per visit where that procedure is required.
-- For every row in the SoA table that has an X (or equivalent marker) at a visit, create a KRI
-- rule_for_llm MUST start with the visit prefix: "V1-", "S1-", "V4-", "All visits-", etc.
-- Include visit window/timing in check-in KRIs (e.g. 'within 90 ± 7 days')
-- For treatment visits: vital signs measured twice (pre and post injection)
-- Include ALL footnote details that apply to the procedure × visit combination
-- Washout KRIs: always say "by checking medication logs and visit timestamps"
-- Lab KRIs: include all specific analytes named in the footnote (do not generalize)
-- Be faithful to the protocol: use exact drug names, doses, timing windows as written"""
-    },
     "ELIG": {
         "label": "Eligibility",
         "id_prefix": "ELIG",
@@ -125,6 +135,9 @@ record retention requirements, eCRF requirements, regulatory compliance rules.
     }
 }
 
+# Derived from CATEGORY_CONFIGS — used by _normalize_kris() to fill category_label.
+CATEGORY_LABELS = {cat: cfg["label"] for cat, cfg in CATEGORY_CONFIGS.items()}
+
 def extract_pages_text(pdf_path: str, page_nums: list[int]) -> str:
     with pdfplumber.open(pdf_path) as pdf:
         total = len(pdf.pages)
@@ -148,8 +161,12 @@ def get_section_pages(sections: list, total_pages: int) -> list[int]:
                 pages.add(p)
     return sorted(pages)
 
-def extract_category(pdf_path: str, manifest: dict, ontology: dict,
+def extract_category(pdf_path: str, manifest: dict,
                      category: str, output_dir: str) -> list[dict]:
+    if category not in CATEGORY_CONFIGS:
+        print(f"  Skipping {category} — not an in-scope domain (ELIG/SAF/END/OPS)")
+        return []
+
     client = anthropic.Anthropic()
 
     with pdfplumber.open(pdf_path) as pdf:
@@ -165,22 +182,14 @@ def extract_category(pdf_path: str, manifest: dict, ontology: dict,
     pages = get_section_pages(sections, total_pages)
     print(f"  {category}: reading pages {pages[:5]}{'...' if len(pages) > 5 else ''} ({len(pages)} total)")
 
-    # For large SOA, split into batches by visit group
-    # For others, extract in one call (or two if > 20 pages)
-    if category == "SOA" and len(pages) > 12:
-        return extract_soa_batched(client, pdf_path, manifest, ontology, pages, output_dir)
-    else:
-        return extract_single_call(client, pdf_path, manifest, ontology,
-                                   category, cfg, pages, output_dir)
+    return extract_single_call(client, pdf_path, manifest,
+                               category, cfg, pages, output_dir)
 
-def extract_single_call(client, pdf_path, manifest, ontology,
+
+def extract_single_call(client, pdf_path, manifest,
                         category, cfg, pages, output_dir) -> list[dict]:
     protocol_text = extract_pages_text(pdf_path, pages)
     protocol_id = manifest.get("protocol_id", "UNKNOWN")
-
-    # Build ontology context (visits + procedure list relevant to this category)
-    visits_context = json.dumps(ontology.get("visits", []), indent=2)
-    footnotes_context = json.dumps(ontology.get("footnotes", {}), indent=2)
 
     section_list = "\n".join(
         f"  - Section {s['section_number']}: {s['title']}"
@@ -193,12 +202,6 @@ PROTOCOL: {protocol_id}
 CATEGORY: {category} — {cfg['label']}
 SECTIONS TO COVER:
 {section_list}
-
-VISIT REFERENCE (from SoA ontology):
-{visits_context}
-
-FOOTNOTES REFERENCE:
-{footnotes_context}
 
 EXTRACTION INSTRUCTIONS:
 {cfg['instructions']}
@@ -221,7 +224,7 @@ Return ONLY the JSON array, starting with [ and ending with ]."""
     print(f"  Calling Claude for {category}...")
     response = client.messages.create(
         model="claude-sonnet-4-20250514",
-        max_tokens=8000,
+        max_tokens=16000,
         messages=[{"role": "user", "content": prompt}],
         system=SYSTEM_PROMPT
     )
@@ -230,96 +233,194 @@ Return ONLY the JSON array, starting with [ and ending with ]."""
     raw = re.sub(r'^```[a-z]*\n?', '', raw)
     raw = re.sub(r'\n?```$', '', raw)
 
-    kris = json.loads(raw)
-    tokens = response.usage.input_tokens + response.usage.output_tokens
+    kris, tokens_repair = _safe_json_loads_kris(raw, client, category, output_dir)
+    tokens = response.usage.input_tokens + response.usage.output_tokens + tokens_repair
     print(f"  → {len(kris)} KRIs extracted ({tokens} tokens)")
     return kris, tokens
 
-def extract_soa_batched(client, pdf_path, manifest, ontology, all_pages, output_dir) -> tuple:
-    """Split SOA extraction into visit group batches."""
-    visits = ontology.get("visits", [])
-    cfg = CATEGORY_CONFIGS["SOA"]
-    protocol_id = manifest.get("protocol_id", "UNKNOWN")
-    footnotes_context = json.dumps(ontology.get("footnotes", {}), indent=2)
 
-    # Group visits by epoch
-    epoch_groups = {}
-    for v in visits:
-        epoch = v.get("epoch", "other")
-        epoch_groups.setdefault(epoch, []).append(v)
+# ─── Robust JSON parsing for LLM responses ───────────────────────────────────
+def _safe_json_loads_kris(raw: str, client, category: str, output_dir: str = None):
+    """Parse model output as JSON, applying common cleanups + a one-shot repair pass on failure.
 
-    all_kris = []
-    total_tokens = 0
-    counter = {"SOA": 0}
+    Cleanups handle the LLM error modes most often seen on long extractions:
+      - Smart/curly quotes → straight quotes
+      - Trailing commas before } or ]
+      - Stray markdown fences left after the basic strip
+      - Leading prose/preamble before the JSON array
 
-    for epoch, epoch_visits in epoch_groups.items():
-        visit_ids = [v["visit_id"] for v in epoch_visits]
-        visits_json = json.dumps(epoch_visits, indent=2)
+    On unrecoverable failure, dispatches a single 'fix this JSON' Claude call.
+    Returns (parsed_list, tokens_used_in_repair).
+    """
+    repair_tokens = 0
 
-        # Get relevant pages for this epoch (use full set — we can't slice by visit)
-        batch_pages = all_pages
+    def _try(text):
+        try:
+            obj = json.loads(text)
+            if isinstance(obj, dict) and "kris" in obj:
+                obj = obj["kris"]
+            if not isinstance(obj, list):
+                return None
+            return [k for k in obj if isinstance(k, dict)]
+        except (json.JSONDecodeError, TypeError):
+            return None
 
-        protocol_text = extract_pages_text(pdf_path, batch_pages)
+    parsed = _try(raw)
+    if parsed is not None:
+        return parsed, repair_tokens
 
-        prompt = f"""You are extracting Schedule of Activities (SOA) KRIs for the {epoch.upper()} epoch.
+    # Cleanup pass 1 — quotes + trailing commas + array carve-out
+    cleaned = raw
+    cleaned = cleaned.replace("\u201c", '"').replace("\u201d", '"')  # curly double quotes
+    cleaned = cleaned.replace("\u2018", "'").replace("\u2019", "'")  # curly single quotes
+    cleaned = re.sub(r',\s*([}\]])', r'\1', cleaned)                  # trailing commas
+    # Carve out the outermost JSON array if there is leading/trailing prose
+    m = re.search(r'\[[\s\S]*\]', cleaned)
+    if m:
+        cleaned = m.group(0)
 
-PROTOCOL: {protocol_id}
-EPOCH: {epoch}
-VISITS IN THIS BATCH: {visit_ids}
+    parsed = _try(cleaned)
+    if parsed is not None:
+        return parsed, repair_tokens
 
-VISITS DETAIL:
-{visits_json}
+    # Truncation salvage — if the response ran out of tokens mid-object,
+    # there's no closing ']'. Walk back to the last well-formed object end
+    # ('}') and close the array there. Recovers every complete KRI prefix
+    # instead of discarding the whole batch.
+    truncation_candidate = cleaned
+    open_idx = truncation_candidate.find('[')
+    if open_idx >= 0 and ']' not in truncation_candidate[open_idx:]:
+        body = truncation_candidate[open_idx:]
+        last_obj_end = body.rfind('}')
+        if last_obj_end > 0:
+            salvaged = body[: last_obj_end + 1] + ']'
+            salvaged = re.sub(r',\s*\]', ']', salvaged)
+            parsed = _try(salvaged)
+            if parsed is not None:
+                print(f"  ⚠ Salvaged {len(parsed)} KRIs from truncated {category} response.")
+                return parsed, repair_tokens
 
-FOOTNOTES:
-{footnotes_context}
-
-EXTRACTION INSTRUCTIONS:
-{cfg['instructions']}
-
-KRI SCHEMA:
-{KRI_SCHEMA}
-
-ID FORMAT: SOA-[VISIT_CODE]-[NNN]
-Examples: SOA-S1-001, SOA-V1-001, SOA-V4-001, SOA-UNS-001, SOA-CROSS-001
-For cross-visit rules use: SOA-CROSS-NNN
-
-SCOPE: Extract KRIs ONLY for visits in this batch: {visit_ids}
-Also extract cross-visit rules that apply to these visits.
-
---- PROTOCOL TEXT ---
-{protocol_text}
---- END ---
-
-Return ONLY a JSON array of KRI objects for this epoch's visits."""
-
-        print(f"  Calling Claude for SOA epoch={epoch} visits={visit_ids}...")
-        response = client.messages.create(
+    # One-shot model-driven repair
+    print(f"  ⚠ JSON parse failed for {category} — invoking repair pass...")
+    repair_prompt = (
+        "The following text was supposed to be a JSON array of KRI objects but failed to parse. "
+        "Return ONLY a corrected JSON array with the same content (start with [ and end with ]). "
+        "Do not add or remove any KRI; only fix syntax issues (unescaped quotes, trailing commas, malformed strings). "
+        "No markdown fences, no prose, no explanation.\n\n"
+        f"BROKEN JSON:\n{raw[:60000]}"
+    )
+    try:
+        rsp = client.messages.create(
             model="claude-sonnet-4-20250514",
-            max_tokens=8000,
-            messages=[{"role": "user", "content": prompt}],
-            system=SYSTEM_PROMPT
+            max_tokens=16000,
+            messages=[{"role": "user", "content": repair_prompt}],
+            system="You repair JSON. You return only valid JSON arrays — nothing else.",
         )
+        repair_text = rsp.content[0].text.strip()
+        repair_text = re.sub(r'^```[a-z]*\n?', '', repair_text)
+        repair_text = re.sub(r'\n?```$', '', repair_text)
+        repair_tokens = rsp.usage.input_tokens + rsp.usage.output_tokens
+        parsed = _try(repair_text)
+        if parsed is not None:
+            return parsed, repair_tokens
+    except Exception as e:
+        print(f"  ⚠ Repair-pass call failed: {e}")
 
-        raw = response.content[0].text.strip()
-        raw = re.sub(r'^```[a-z]*\n?', '', raw)
-        raw = re.sub(r'\n?```$', '', raw)
-        batch_kris = json.loads(raw)
-        tokens = response.usage.input_tokens + response.usage.output_tokens
-        total_tokens += tokens
-        all_kris.extend(batch_kris)
-        print(f"    → {len(batch_kris)} KRIs ({tokens} tokens)")
+    # Last resort — log raw output so the user can fix manually, return empty
+    if output_dir:
+        debug_path = os.path.join(output_dir, f"_raw_{category}_unparseable.txt")
+        try:
+            with open(debug_path, "w", encoding="utf-8") as f:
+                f.write(raw)
+            print(f"  ⚠ Saved unparseable output to {debug_path}; returning 0 KRIs for {category}.")
+        except Exception:
+            pass
+    return [], repair_tokens
 
-    return all_kris, total_tokens
+def _strip_outer_quotes(s):
+    if not isinstance(s, str):
+        return s
+    s = s.strip()
+    if len(s) >= 2 and s[0] == '"' and s[-1] == '"':
+        return s[1:-1].strip()
+    return s.lstrip('"').rstrip('"').strip()
 
-def run_extraction(pdf_path: str, manifest_path: str, ontology_path: str,
+
+def _split_legacy_protocol_reference(ref):
+    """Older prompts produced 'Section X.X, Page N: "quote"' as a single field.
+    Split into (clean_ref, quote) — no-op if already clean.
+    """
+    if not isinstance(ref, str):
+        return ref, ""
+    m = re.match(r'^(.*?):\s*"(.+)"\s*$', ref.strip())
+    if m:
+        return m.group(1).strip(), m.group(2).strip()
+    return ref.strip(), ""
+
+
+def _normalize_kris(kris, category):
+    """Ensure every KRI matches the SKILL.md output schema and has agent_count.
+
+    Handles legacy outputs (single embedded-quote protocol_reference) and missing
+    fields (supporting_quote, combined_ref, severity, agent_count). Drops outer
+    double quotes from supporting_quote per Quality Rule 11.
+    """
+    out = []
+    for k in kris or []:
+        if not isinstance(k, dict):
+            continue
+        # category_id / category_label
+        k.setdefault("category_id", category)
+        k.setdefault("category_label", CATEGORY_LABELS.get(category, category))
+
+        # Clean up protocol_reference + supporting_quote (handle legacy format)
+        ref = k.get("protocol_reference", "") or ""
+        quote = k.get("supporting_quote", "") or ""
+        if not quote:
+            ref_clean, ref_quote = _split_legacy_protocol_reference(ref)
+            if ref_quote:
+                ref = ref_clean
+                quote = ref_quote
+        quote = _strip_outer_quotes(quote)
+        ref = ref.strip()
+        k["protocol_reference"] = ref
+        k["supporting_quote"] = quote
+
+        # combined_ref — always recompute deterministically
+        if ref and quote:
+            k["combined_ref"] = f'{ref} — "{quote}"'
+        elif ref:
+            k["combined_ref"] = ref
+        else:
+            k.setdefault("combined_ref", "")
+
+        # additional_footnotes — null is allowed
+        if "additional_footnotes" not in k:
+            k["additional_footnotes"] = None
+
+        # severity — default major if missing/invalid
+        sev = (k.get("severity") or "").lower().strip()
+        if sev not in {"critical", "major", "minor"}:
+            sev = "major"
+        k["severity"] = sev
+
+        # agent_count — drives Step 2.6 tier classification.
+        # Single-shot LLM extraction is not a real 10-agent panel; we set it to
+        # 7 so the KRI lands in T1 (auto-keep) rather than T3 (auto-rejected).
+        if "agent_count" not in k or not isinstance(k.get("agent_count"), int):
+            k["agent_count"] = 7
+
+        out.append(k)
+    return out
+
+
+def run_extraction(pdf_path: str, manifest_path: str,
                    output_dir: str, categories: list = None):
     with open(manifest_path) as f:
         manifest = json.load(f)
-    with open(ontology_path) as f:
-        ontology = json.load(f)
 
     protocol_id = manifest.get("protocol_id", "UNKNOWN")
-    cats = categories or ["SOA", "ELIG", "SAF", "END", "OPS"]
+    cats = categories or ["ELIG", "SAF", "END", "OPS"]
 
     all_results = {}
     total_tokens = 0
@@ -327,11 +428,16 @@ def run_extraction(pdf_path: str, manifest_path: str, ontology_path: str,
     for cat in cats:
         print(f"\n--- {cat} ---")
         try:
-            result = extract_category(pdf_path, manifest, ontology, cat, output_dir)
+            result = extract_category(pdf_path, manifest, cat, output_dir)
             if isinstance(result, tuple):
                 kris, tokens = result
             else:
                 kris, tokens = result, 0
+
+            # Schema normalization — every KRI must have the SKILL.md output schema
+            # plus agent_count for the Step 2.6 tier classifier.
+            kris = _normalize_kris(kris, cat)
+
             all_results[cat] = kris
             total_tokens += tokens
 
@@ -359,36 +465,20 @@ def run_extraction(pdf_path: str, manifest_path: str, ontology_path: str,
     return all_results
 
 if __name__ == "__main__":
-    PROTOCOLS = {
-        "ENX-CL-05-002": {
-            "pdf": "/mnt/user-data/uploads/ENX-CL-05-002_Clinical_Study_Protocol_v_2_0_Agatha_copy.pdf",
-            "dir": "/home/claude/protocol-kri-extractor/output/ENX-CL-05-002"
-        },
-        "B1481038": {
-            "pdf": "/mnt/user-data/uploads/Protocol_B1481038.pdf",
-            "dir": "/home/claude/protocol-kri-extractor/output/B1481038"
-        },
-        "LCZ696G2301": {
-            "pdf": "/mnt/user-data/uploads/Novartis__LCZ696G2301-_Phase_3_study_to_evaluate_the_efficacy_and_safety_of_LCZ696pdf.pdf",
-            "dir": "/home/claude/protocol-kri-extractor/output/LCZ696G2301"
-        }
-    }
+    import argparse
+    parser = argparse.ArgumentParser(description="Step 2 — Extract KRIs from protocol")
+    parser.add_argument("--pdf",  required=True, help="Path to protocol PDF")
+    parser.add_argument("--dir",  required=True, help="Output directory (must contain manifest.json)")
+    parser.add_argument("--cats", default=None,  help="Comma-separated category list, e.g. ELIG,SAF (default: ELIG,SAF,END,OPS)")
+    args = parser.parse_args()
 
-    target = sys.argv[1] if len(sys.argv) > 1 else "ENX-CL-05-002"
-    cats = sys.argv[2].split(",") if len(sys.argv) > 2 else None  # e.g. "SOA,ELIG"
-
-    if target not in PROTOCOLS:
-        print(f"Unknown protocol. Choose from: {list(PROTOCOLS.keys())}")
-        sys.exit(1)
-
-    p = PROTOCOLS[target]
+    cats = args.cats.split(",") if args.cats else None
     print(f"\n{'='*55}")
-    print(f"Extracting KRIs: {target}" + (f" (categories: {cats})" if cats else " (all categories)"))
+    print(f"Extracting KRIs: {os.path.basename(args.pdf)}" + (f" (categories: {cats})" if cats else " (all in-scope categories)"))
 
     run_extraction(
-        pdf_path=p["pdf"],
-        manifest_path=os.path.join(p["dir"], "manifest.json"),
-        ontology_path=os.path.join(p["dir"], "ontology.json"),
-        output_dir=p["dir"],
+        pdf_path=args.pdf,
+        manifest_path=os.path.join(args.dir, "manifest.json"),
+        output_dir=args.dir,
         categories=cats
     )

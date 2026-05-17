@@ -1,0 +1,6 @@
+_archive/
+*.previous/
+*.pre_sync_backup_*
+__pycache__/
+*.pyc
+.DS_Store

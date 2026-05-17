@@ -9,9 +9,11 @@ import json, sys, re, os
 import pdfplumber
 import anthropic
 
-# ─── Domain categories (ICH GCP universal — not protocol-specific) ───────────
+# ─── In-scope domain categories (ICH GCP, minus SOA which is handled separately) ─
+# Schedule of Activities (SOA) is OUT OF SCOPE for this skill — handled by
+# the separate `soa-kri-extractor` skill. SoA sections in the protocol must be
+# LEFT UNMAPPED (do not add an "SOA" key to section_map).
 DOMAIN_CATEGORIES = {
-    "SOA":  "Schedule of Activities — visit schedule, procedure matrix, footnotes, visit windows",
     "ELIG": "Eligibility — inclusion criteria, exclusion criteria, randomization criteria",
     "SAF":  "Safety & Toxicity — AE/SAE reporting, stopping rules, toxicity management, safety monitoring",
     "END":  "Endpoints & Statistics — objectives, efficacy endpoints, analysis sets, statistical methods",
@@ -34,25 +36,46 @@ def extract_pages_text(pdf_path: str, page_nums: list[int]) -> str:
     return "\n\n".join(parts)
 
 def find_toc_pages(pdf_path: str) -> list[int]:
-    """Locate TOC pages — search first 40 pages for numbered section list."""
+    """Locate TOC pages — search first 40 pages for STRONG TOC markers.
+
+    Strong markers (any one is decisive):
+      - The literal phrase 'Table of Contents' on the page
+      - Lines with dot-leaders followed by a page number (e.g. "5.7 Missed Visits ......... 50")
+        — characteristic of a real TOC, almost never present in body content
+
+    Falls back to the previous weaker heuristic (numbered-section lines) only if
+    no strong-marker pages are found, to remain compatible with older protocols
+    whose TOC lacks dot leaders. The fallback was the original behavior — kept
+    as a safety net so we never lose functionality on protocols where the new
+    heuristic produces no candidates.
+    """
+    DOT_LEADER = re.compile(r'\.{4,}\s*\d{1,3}\s*$')
+    NUM_HEADING = re.compile(r'^\d[\d.]*\s+\w')
     with pdfplumber.open(pdf_path) as pdf:
-        candidates = []
-        for i in range(min(40, len(pdf.pages))):
+        n = min(40, len(pdf.pages))
+        strong = []
+        weak = []
+        for i in range(n):
             text = pdf.pages[i].extract_text() or ""
+            text_lower = text.lower()
             lines = [l.strip() for l in text.split("\n") if l.strip()]
-            # TOC heuristic: page has 5+ lines that start with digit and contain dots or page numbers
-            toc_lines = [l for l in lines if re.match(r'^\d[\d.]*\s+\w', l) and
-                        ('.' in l or re.search(r'\d{1,3}$', l))]
-            if len(toc_lines) >= 5:
-                candidates.append(i + 1)
-    # Return up to 4 consecutive TOC pages
+            dot_lines = [l for l in lines if DOT_LEADER.search(l)]
+            has_toc_phrase = "table of contents" in text_lower
+            if has_toc_phrase or len(dot_lines) >= 3:
+                strong.append(i + 1)
+                continue
+            num_lines = [l for l in lines if NUM_HEADING.match(l) and ('.' in l or re.search(r'\d{1,3}$', l))]
+            if len(num_lines) >= 5:
+                weak.append(i + 1)
+
+    candidates = strong if strong else weak
     if not candidates:
         return []
     result = [candidates[0]]
     for p in candidates[1:]:
         if p - result[-1] <= 2:
             result.append(p)
-        if len(result) >= 4:
+        if len(result) >= 6:
             break
     return result
 
@@ -93,7 +116,6 @@ Extract and return a JSON object with this exact structure:
   "total_pages": {total_pages},
   "toc_pages": {toc_pages},
   "section_map": {{
-    "SOA":  [],
     "ELIG": [],
     "SAF":  [],
     "END":  [],
@@ -101,8 +123,15 @@ Extract and return a JSON object with this exact structure:
   }}
 }}
 
-For section_map, scan the TOC carefully and assign every section to its primary domain.
-The 5 domain categories and what they cover:
+OUT OF SCOPE — DO NOT MAP: Schedule-of-Activities (SoA) sections — the SoA
+table itself, its footnote pages, the visit-schedule narrative, and any section
+primarily about "procedure × visit" rules or visit windows. These are handled
+by the separate `soa-kri-extractor` skill. Leave them entirely out of
+section_map. Do NOT add an "SOA" key. Do NOT reclassify them under ELIG/SAF/
+END/OPS — just omit them.
+
+For section_map, scan the TOC carefully and assign every IN-SCOPE section to
+its primary domain. The 4 in-scope domain categories and what they cover:
 {json.dumps(DOMAIN_CATEGORIES, indent=2)}
 
 Each section entry must have:
@@ -145,44 +174,27 @@ Rules:
     return manifest
 
 if __name__ == "__main__":
-    protocols = [
-        {
-            "id": "ENX-CL-05-002",
-            "path": "/mnt/user-data/uploads/ENX-CL-05-002_Clinical_Study_Protocol_v_2_0_Agatha_copy.pdf",
-            "out":  "/home/claude/protocol-kri-extractor/output/ENX-CL-05-002/manifest.json"
-        },
-        {
-            "id": "B1481038",
-            "path": "/mnt/user-data/uploads/Protocol_B1481038.pdf",
-            "out":  "/home/claude/protocol-kri-extractor/output/B1481038/manifest.json"
-        },
-        {
-            "id": "LCZ696G2301",
-            "path": "/mnt/user-data/uploads/Novartis__LCZ696G2301-_Phase_3_study_to_evaluate_the_efficacy_and_safety_of_LCZ696pdf.pdf",
-            "out":  "/home/claude/protocol-kri-extractor/output/LCZ696G2301/manifest.json"
-        },
-    ]
-    
-    target = sys.argv[1] if len(sys.argv) > 1 else "all"
-    
-    for p in protocols:
-        if target != "all" and p["id"] != target:
-            continue
-        print(f"\n{'='*55}")
-        print(f"Building manifest: {p['id']}")
-        try:
-            manifest = build_manifest(p["path"], p["id"])
-            with open(p["out"], "w") as f:
-                json.dump(manifest, f, indent=2)
-            print(f"  Saved → {p['out']}")
-            # Summary
-            total_sections = sum(len(v) for k, v in manifest["section_map"].items())
-            print(f"  Sections mapped: {total_sections}")
-            for cat, sections in manifest["section_map"].items():
-                if sections:
-                    titles = [s["section_number"] + " " + s["title"][:35] for s in sections]
-                    print(f"    {cat}: {titles}")
-            print(f"  Tokens: {manifest['_meta']['tokens_used']}")
-        except Exception as e:
-            print(f"  ERROR: {e}")
-            import traceback; traceback.print_exc()
+    import argparse
+    parser = argparse.ArgumentParser(description="Step 1A — Build protocol manifest")
+    parser.add_argument("--pdf",      required=True, help="Path to protocol PDF")
+    parser.add_argument("--protocol", required=True, help="Protocol ID (e.g. B1481038)")
+    parser.add_argument("--out",      required=True, help="Output path for manifest.json")
+    args = parser.parse_args()
+
+    print(f"\n{'='*55}")
+    print(f"Building manifest: {args.protocol}")
+    try:
+        manifest = build_manifest(args.pdf, args.protocol)
+        with open(args.out, "w") as f:
+            json.dump(manifest, f, indent=2)
+        print(f"  Saved → {args.out}")
+        total_sections = sum(len(v) for v in manifest["section_map"].values())
+        print(f"  Sections mapped: {total_sections}")
+        for cat, sections in manifest["section_map"].items():
+            if sections:
+                titles = [s["section_number"] + " " + s["title"][:35] for s in sections]
+                print(f"    {cat}: {titles}")
+        print(f"  Tokens: {manifest['_meta']['tokens_used']}")
+    except Exception as e:
+        print(f"  ERROR: {e}")
+        import traceback; traceback.print_exc()
