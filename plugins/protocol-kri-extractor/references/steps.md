@@ -1027,7 +1027,7 @@ If they say no, the pipeline is complete.
 **Accepted golden set formats**:
 - JSON file with a `kris` array (same schema as `extracted_kris.json`)
 - JSON file that IS a flat array of KRI objects
-- JSON file with category-level keys (e.g. `{"ELIG": [...], "SAF": [...]}`). If the golden set also contains a `"SOA"` or `"NDEF"` key, those entries are loaded into a side channel as "out of scope for this skill" and excluded from this skill's comparison score.
+- JSON file with category-level keys (e.g. `{"ELIG": [...], "SAF": [...]}`). If the golden set also contains a `"SOA"` key, those entries are loaded into a side channel as "out of scope for this skill" and excluded from this skill's comparison score.
 
 Normalize the golden set into a flat list of KRI objects before proceeding.
 

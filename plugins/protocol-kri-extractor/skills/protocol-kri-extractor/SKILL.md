@@ -699,7 +699,7 @@ Orphan scanning is a **recall problem** — the cost of missing an orphan is hig
 
 ### Phase 1 — Primary section sweep (section-by-section)
 
-For each section in `manifest.json` (across all 5 domains in the section map):
+For each section in `manifest.json` (across all 4 domains in the section map):
 
 1. Load the full text of the section's page range via pdfplumber
 2. Load the list of all existing KRIs whose `protocol_reference` cites any page in that range (compact form: `kri_id` + `rule_for_llm`)
@@ -1034,7 +1034,7 @@ If the user provides a golden set, run Step 4C (see `references/steps.md` for fu
 
 ### How comparison works
 
-**Phase 1 — Matching**: For each in-scope category (ELIG, SAF, END, OPS) separately, match extracted KRIs to golden KRIs using semantic similarity (not just ID matching). Handle 1:many and many:1 splits. If the supplied golden set contains SOA or NDEF entries, they are loaded into a side channel and reported as "out of scope for this skill — see soa-kri-extractor"; they do not count against this skill's score.
+**Phase 1 — Matching**: For each in-scope category (ELIG, SAF, END, OPS) separately, match extracted KRIs to golden KRIs using semantic similarity (not just ID matching). Handle 1:many and many:1 splits. If the supplied golden set contains SOA entries, they are loaded into a side channel and reported as "out of scope for this skill — see soa-kri-extractor"; they do not count against this skill's score.
 
 **Phase 2 — Two-tier semantic judging**: LLM evaluates each pair using two criteria:
 
@@ -1164,7 +1164,7 @@ Runs per-domain, AFTER Step 2.5 Section Obligation Inventory and BEFORE Phase 3.
 **Gate behavior — `--auto-approve-unanimous` (default ON)**:
 - Pipeline runs to completion without blocking per-domain on flagged items.
 - Flagged items default to REJECTED at Phase 4 (conservative Golden Set).
-- Flagged items are preserved verbatim in each domain's `{domain}_manual_review_decisions.json.sections.flagged_for_review` AND surfaced together in the end-of-run consolidated **Step 4A-FlaggedReview** table (`flagged_review_decisions.json`) so the user reviews all 5 domains' flagged items in one pass.
+- Flagged items are preserved verbatim in each domain's `{domain}_manual_review_decisions.json.sections.flagged_for_review` AND surfaced together in the end-of-run consolidated **Step 4A-FlaggedReview** table (`flagged_review_decisions.json`) so the user reviews all 4 domains' flagged items in one pass.
 - The user can re-include any flagged KRI by setting `user_override: "include"` in `flagged_review_decisions.json` and re-running `python run.py --from 4a` to regenerate the Golden Set.
 
 **Gate behavior — `--interactive`**:
@@ -1199,7 +1199,7 @@ Runs per-domain, AFTER Step 2.5 Section Obligation Inventory and BEFORE Phase 3.
 
 ### Step 4A-FlaggedReview — End-of-Run Cross-Domain Flagged Review (runs after Step 4A-Dedup)
 
-Collects every flagged KRI from all 5 domains' Step 2.6 autojudgment outputs and produces a single consolidated table (`flagged_review_decisions.json`) with FULL KRI columns so the user can scan all flagged items in one pass, not per-domain.
+Collects every flagged KRI from all 4 domains' Step 2.6 autojudgment outputs and produces a single consolidated table (`flagged_review_decisions.json`) with FULL KRI columns so the user can scan all flagged items in one pass, not per-domain.
 
 - **Input**: all `{domain}_manual_review_decisions.json.sections.flagged_for_review` rows.
 - **Default action at Phase 4**: flagged items are **rejected** (not included in the Golden Set). They are preserved in the artifact for review.
