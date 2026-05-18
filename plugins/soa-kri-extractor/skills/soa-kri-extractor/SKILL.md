@@ -131,16 +131,44 @@ DEVIATION: <what counts as a deviation, with exact failure conditions>
 ### Templates
 
 **Procedural KRI (procedure × visit cell):**
+
+> ⚠️ Before applying this template, identify the source table's primary-key shape. Most procedural records are `(subject, visit)` keyed — the template below applies directly. But some tables are `(subject, visit)` keyed with **timepoint COLUMNS** (e.g. `<field>_pre / _mid / _post`) instead of separate timepoint rows. For those, do NOT look for separate `D1_PRE` / `D1_POST` records — see the timepoint-columns variant below.
+
 ```
 SOURCE: The <procedure> record at the <visit_display_name> (<visit_id>) visit, per subject[. Required <items>: <list>].
 CHECK: <procedure> was performed and dated at <visit_display_name> per the Schedule of Activities[. The record contains values for all N required <items>: <list>][. <methodology / timing>].
 DEVIATION: For an active subject expected to attend <visit_display_name>, no <procedure> record exists at that visit, or the record is undated[. Or any of the N required <items> is missing].
 ```
 
-**Check-in (window relative to randomization):**
+**Procedural KRI variant — timepoint-columns source (single visit row with pre/mid/post cells):**
+
+Use when the source table merges sub-visit timepoints into a single visit row with timepoint-suffixed columns. SOURCE references the specific cells; CHECK requires the cells be populated. Note: per-cell timestamps are typically NOT captured, so any temporal check ("after iv_end_time") will fail — drop it.
+
 ```
-SOURCE: The <visit_id> (<visit_label>) visit date and the randomization (Day 1) date, per subject.
-CHECK: <visit_id> (<visit_label>) visit date is within ±<N> days of (Day 1 + <offset> days).
+SOURCE: <source_table> row at visit_label='<visit>' (visno='<NN>'), per subject; specifically the cells <cell_1>, <cell_2>, ..., <cell_K>.
+CHECK: The row exists, is dated (available_at), AND at least one of the K target cells is non-null (assessment performed).
+DEVIATION: Row is missing OR all K target cells are null.
+```
+
+**Procedural KRI variant — assessment-of-event gated on occurrence:**
+
+Use when the SoA lists "Assessment of [event type]" at certain visits but the assessment is only meaningful when the underlying event has occurred (e.g. amputations, surgical procedures, hospitalizations). Without the gate, the rule fires unconditionally on every subject who never experienced the event and produces noise.
+
+```
+SOURCE: <event_table> rows for this subject (event_date column); the visit date for V<N> from <visits_table>.
+CHECK: Conditional on event status as of V<N>:
+       (a) If any <event_table>.event_date <= V<N> visit date: an assessment record is required at V<N> and must be dated.
+       (b) If no event has occurred on or before V<N>: this rule is N/A.
+DEVIATION: Event occurred on or before V<N> AND no corresponding assessment record exists, OR record is undated.
+```
+
+**Check-in (window relative to randomization):**
+
+> ⚠️ The `<offset>` MUST be derived from the protocol's Day-N label for the visit, NOT from `Week_number × 7`. Most protocols define Day 1 = first day of Week 1, which makes the Week-N target = `Day 1 + (Day_N − 1)` days. Look up the SoA's Day label (e.g. "Day 8" for Week 2) and use `Day_N − 1` as the offset. Encoding `Week_number × 7` is wrong by exactly one week and produces a 100% false-positive rate on any subject whose visits are on schedule (when the window is tight, e.g. ±3 days).
+
+```
+SOURCE: The <visit_id> (<visit_label>, Day <day_N>) visit date and the randomization (Day 1) date, per subject.
+CHECK: <visit_id> visit date is within ±<N> days of (Day 1 + <day_N − 1> days), per the protocol footnote on visit windows.
 DEVIATION: For an active subject, the <visit_id> visit date is outside this window, or the visit date is missing.
 ```
 
@@ -209,6 +237,18 @@ SOURCE: The Vital signs record at the V3 visit, per subject. Required measuremen
 CHECK: Vital signs (BP, HR, temperature, weight) were measured and recorded at V3.
 DEVIATION: Record is missing, undated, or missing any of BP, HR, temperature, weight.
 ```
+
+**Dosing-visit variant — pre/post-dose timepoints (Footnote-5 pattern):**
+
+When the protocol's vital-signs footnote requires two timepoints at dosing visits (typically pre-dose + ~15 min post-dose), the rule must enforce **timepoint count**, not just record existence. A single row at the visit_label satisfies the naive rule but misses the post-dose set.
+
+```
+SOURCE: <vitals_table> rows at the V<N> (dosing visit) visit, per subject; required components <list>; each row's timepoint identified by exam_time.
+CHECK: At V<N>, <vitals_table> has AT LEAST TWO rows with the same visit_label and DISTINCT exam_time values (per protocol footnote: pre-dose + ~15 min post-dose). Each timepoint set has all required components non-null.
+DEVIATION: Fewer than 2 distinct-exam_time rows at the dosing visit, OR any required component null in either set.
+```
+
+If the protocol has a body-temp-from-AE-solicitation carve-out (e.g. footnote allowing post-dose body temp to come from a solicited-AE table), state the carve-out in SOURCE.
 
 ---
 
@@ -405,7 +445,7 @@ KRIs whose `rule_for_llm` cannot produce a deterministic YES/NO answer are moved
 ## Quality rules (every KRI must satisfy)
 
 1. **Faithfulness:** Use exact drug names, doses, thresholds, timing windows from the protocol. Never generalize.
-2. **Lab panels:** Include all analytes from the protocol footnote — never just `"biochemistry panel"`.
+2. **Lab panels:** Include all analytes from the protocol footnote — never just `"biochemistry panel"`. Long-format lab tables often store the same analyte under multiple `lab_parameter` strings with varying unit suffixes (e.g. `CRP (mg/dL)`, `CRP (mg/L)`, `CRP ()`). Either enumerate all known variants in the IN-clause inside SOURCE, or specify in CHECK that matching is unit-suffix-insensitive (match the analyte root, strip trailing parentheticals).
 3. **Vitals position:** Use the exact position wording the protocol uses.
 4. **Visit prefix:** Every SOA `rule_for_llm` starts with visit code: `V1-`, `S2-`, `SCR-`, `D1_PRE-`, `D1_POST-`, `All visits-`.
 5. **No hallucination:** Every KRI must cite a real section + page.
@@ -423,6 +463,10 @@ KRIs whose `rule_for_llm` cannot produce a deterministic YES/NO answer are moved
 17. **Footnote details embedded in rule_for_llm** when the footnote provides parameter / analyte / measurement / methodology specifics.
 18. **Bundle component lists** in `rule_for_llm` for recognized standardized bundles.
 19. **Procedure-major ordering** in the assembled output.
+20. **Per-cell timestamps are typically absent**: source tables in the timepoint-columns shape (procedural variant) usually carry only a row-level `available_at` or `exam_date`; the individual `<field>_pre / _mid / _post` cells are not time-stamped. Do NOT write CHECK clauses that require a cell to be populated "after" another timestamp (e.g. "the post-cell must be populated after iv_end_time"). The cell-populated condition is the testable evidence per protocol design; the temporal check is unverifiable and produces silent `insufficient_data`.
+21. **Investigator-judgment conditionals**: When the SoA item is gated on investigator clinical judgment ("only if deemed necessary"), the judgment itself is not captured in EDC. Two valid choices: (a) bind the rule to a proxy gate that IS in EDC (e.g. "if an AE was filed at or near this visit") and encode the proxy in CHECK; OR (b) flag the rule as untestable and skip it. Do NOT write the rule as absolute — it produces noise on every subject for whom the judgment conditional didn't trigger.
+22. **Severity calibration — clinical vs data-quality omissions**: Distinguish two failure modes in DEVIATION wording. (1) Clinical assessment omission (whole record missing, procedure not performed) → assign protocol-driven severity (often `major`). (2) Data-quality omission (record present but date null, units inconsistent across visits, sub-field skipped while main field is captured) → typically `minor` — the procedure happened, the EDC entry was sloppy. When the rule could trigger on both modes, prefer two KRIs (one per severity) over a mixed-severity rule. Per-visit lab and assessment rules are the most common offenders.
+23. **Name the source table explicitly in SOURCE**: SOURCE must reference exact source-table names (e.g. `raw_vital`, `raw_solicited_ae`, `micro_culture_results`), not narrative paraphrases ("the vital-signs record", "the solicited-AE assessment"). Exact names enable downstream wiring verification and prevent the downstream LLM from guessing the source.
 
 ---
 
