@@ -45,7 +45,6 @@ import sys
 import time
 import shutil
 import argparse
-import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pdfplumber
@@ -83,7 +82,6 @@ class PageCache:
         self._cache = {}
         self._pdf = None
         self._total_pages = 0
-        self._lock = threading.Lock()
 
     def __enter__(self):
         self._pdf = pdfplumber.open(self.pdf_path)
@@ -95,14 +93,13 @@ class PageCache:
             self._pdf.close()
 
     def get(self, page_num):
-        with self._lock:
-            if page_num in self._cache:
-                return self._cache[page_num]
-            if not (1 <= page_num <= self._total_pages):
-                return ""
-            text = self._pdf.pages[page_num - 1].extract_text() or ""
-            self._cache[page_num] = text
-            return text
+        if page_num in self._cache:
+            return self._cache[page_num]
+        if not (1 <= page_num <= self._total_pages):
+            return ""
+        text = self._pdf.pages[page_num - 1].extract_text() or ""
+        self._cache[page_num] = text
+        return text
 
     def get_with_context(self, center_pg, radius=1):
         """Return ±radius pages around center_pg, joined with [PAGE N] markers."""
