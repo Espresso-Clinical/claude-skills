@@ -121,7 +121,7 @@ def parse_page_from_ref(ref):
     """Extract the first page number from a protocol_reference string."""
     if not ref:
         return None
-    m = re.search(r'p\.?\s*(\d+)', ref, re.IGNORECASE)
+    m = re.search(r'(?:p\.?|pages?)\s*(\d+)', ref, re.IGNORECASE)
     return int(m.group(1)) if m else None
 
 
