@@ -1,8 +1,9 @@
 """
 Step 2 — Per-Section KRI Extraction (ELIG / SAF / END / OPS)
-Extracts KRIs from each in-scope protocol section identified in the manifest.
-One LLM call per section group (batched by domain category).
-Produces raw_ELIG.json, raw_SAF.json, raw_END.json, raw_OPS.json.
+
+10-agent panel per domain: 5 Claude + 5 Gemini agents run independently, then
+their outputs are merged and clustered with SequenceMatcher to set proper
+agent_count for Step 2.6 tier classification.
 
 Schedule of Activities (SOA) is OUT OF SCOPE for this skill — handled by the
 separate `soa-kri-extractor` skill. Every extractor prompt below carries the
@@ -14,6 +15,8 @@ Protocol-agnostic — driven entirely by the manifest's section map.
 import json, sys, re, os
 import pdfplumber
 import anthropic
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from difflib import SequenceMatcher
 
 # Mandatory SOA-exclusion block injected into every domain extractor prompt.
 SOA_EXCLUSION_BLOCK = """
@@ -135,10 +138,83 @@ record retention requirements, eCRF requirements, regulatory compliance rules.
     }
 }
 
-# Derived from CATEGORY_CONFIGS — used by _normalize_kris() to fill category_label.
-CATEGORY_LABELS = {cat: cfg["label"] for cat, cfg in CATEGORY_CONFIGS.items()}
+CATEGORY_LABELS = {
+    "ELIG": "Eligibility",
+    "SAF": "Safety & Toxicity",
+    "END": "Endpoints & Statistics",
+    "OPS": "Operations & Compliance",
+}
 
-def extract_pages_text(pdf_path: str, page_nums: list[int]) -> str:
+# ─── SequenceMatcher clustering helpers ──────────────────────────────────────
+
+def normalize_rule(rule):
+    if not rule:
+        return ""
+    r = rule.lower()
+    r = re.sub(r"[^\w\s]", " ", r)
+    r = re.sub(r"\s+", " ", r).strip()
+    r = re.sub(r"^(verify that|confirm that|check that|ensure that)\s+", "", r)
+    return r
+
+
+def rules_similar(a, b, threshold=0.72):
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    if len(a) < 10 or len(b) < 10:
+        return False
+    if max(len(a), len(b)) / max(1, min(len(a), len(b))) > 2.5:
+        return False
+    return SequenceMatcher(None, a, b).ratio() >= threshold
+
+
+def cluster_agent_outputs(all_agent_kris):
+    """
+    all_agent_kris: list of (agent_label, kris_list) where agent_label is e.g. "C1", "G1"
+    Returns: list of clusters. Each cluster is a list of dicts {kri, agent_label}.
+    """
+    clusters = []
+    for agent_label, kris in all_agent_kris:
+        for kri in kris:
+            norm = normalize_rule(kri.get("rule_for_llm", ""))
+            if not norm:
+                continue
+            placed = False
+            for cluster in clusters:
+                rep_norm = normalize_rule(cluster[0]["kri"].get("rule_for_llm", ""))
+                if rules_similar(norm, rep_norm):
+                    cluster.append({"kri": kri, "agent_label": agent_label})
+                    placed = True
+                    break
+            if not placed:
+                clusters.append([{"kri": kri, "agent_label": agent_label}])
+    return clusters
+
+
+def pick_representative(cluster):
+    """Pick the KRI with the longest rule_for_llm as the representative."""
+    return max(cluster, key=lambda x: len(x["kri"].get("rule_for_llm", "") or ""))
+
+
+def merge_clusters(clusters):
+    """
+    Convert clusters to merged KRI list.
+    Each output KRI gets agent_count = number of distinct agents in the cluster.
+    """
+    merged = []
+    for cluster in clusters:
+        distinct_agents = len({entry["agent_label"] for entry in cluster})
+        rep = pick_representative(cluster)
+        kri = dict(rep["kri"])
+        kri["agent_count"] = distinct_agents
+        merged.append(kri)
+    return merged
+
+
+# ─── PDF helpers ──────────────────────────────────────────────────────────────
+
+def extract_pages_text(pdf_path: str, page_nums: list) -> str:
     with pdfplumber.open(pdf_path) as pdf:
         total = len(pdf.pages)
         parts = []
@@ -149,7 +225,8 @@ def extract_pages_text(pdf_path: str, page_nums: list[int]) -> str:
                     parts.append(f"[PAGE {n}]\n{text}")
     return "\n\n".join(parts)
 
-def get_section_pages(sections: list, total_pages: int) -> list[int]:
+
+def get_section_pages(sections: list, total_pages: int) -> list:
     pages = set()
     for s in sections:
         pa = s.get("pages_approx") or [None, None]
@@ -161,33 +238,13 @@ def get_section_pages(sections: list, total_pages: int) -> list[int]:
                 pages.add(p)
     return sorted(pages)
 
-def extract_category(pdf_path: str, manifest: dict,
-                     category: str, output_dir: str) -> list[dict]:
-    if category not in CATEGORY_CONFIGS:
-        print(f"  Skipping {category} — not an in-scope domain (ELIG/SAF/END/OPS)")
-        return []
 
-    client = anthropic.Anthropic()
-
-    with pdfplumber.open(pdf_path) as pdf:
-        total_pages = len(pdf.pages)
-
-    cfg = CATEGORY_CONFIGS[category]
-    sections = manifest.get("section_map", {}).get(category, [])
-
-    if not sections:
-        print(f"  No sections mapped for {category} — skipping")
-        return []
-
-    pages = get_section_pages(sections, total_pages)
-    print(f"  {category}: reading pages {pages[:5]}{'...' if len(pages) > 5 else ''} ({len(pages)} total)")
-
-    return extract_single_call(client, pdf_path, manifest,
-                               category, cfg, pages, output_dir)
-
+# ─── Claude single-agent extraction ──────────────────────────────────────────
 
 def extract_single_call(client, pdf_path, manifest,
-                        category, cfg, pages, output_dir) -> list[dict]:
+                        category, cfg, pages, output_dir,
+                        temperature=0.2) -> tuple:
+    """Run one Claude extraction call. Returns (kris_list, tokens_used)."""
     protocol_text = extract_pages_text(pdf_path, pages)
     protocol_id = manifest.get("protocol_id", "UNKNOWN")
 
@@ -217,14 +274,14 @@ ID FORMAT for this category:
 {protocol_text}
 --- END ---
 
-Return a JSON array of KRI objects. Every rule or requirement in the protocol text 
+Return a JSON array of KRI objects. Every rule or requirement in the protocol text
 that a CRA would need to verify must become a KRI.
 Return ONLY the JSON array, starting with [ and ending with ]."""
 
-    print(f"  Calling Claude for {category}...")
     response = client.messages.create(
         model="claude-sonnet-4-20250514",
-        max_tokens=16000,
+        max_tokens=8000,
+        temperature=temperature,
         messages=[{"role": "user", "content": prompt}],
         system=SYSTEM_PROMPT
     )
@@ -235,21 +292,14 @@ Return ONLY the JSON array, starting with [ and ending with ]."""
 
     kris, tokens_repair = _safe_json_loads_kris(raw, client, category, output_dir)
     tokens = response.usage.input_tokens + response.usage.output_tokens + tokens_repair
-    print(f"  → {len(kris)} KRIs extracted ({tokens} tokens)")
     return kris, tokens
 
 
 # ─── Robust JSON parsing for LLM responses ───────────────────────────────────
+
 def _safe_json_loads_kris(raw: str, client, category: str, output_dir: str = None):
     """Parse model output as JSON, applying common cleanups + a one-shot repair pass on failure.
 
-    Cleanups handle the LLM error modes most often seen on long extractions:
-      - Smart/curly quotes → straight quotes
-      - Trailing commas before } or ]
-      - Stray markdown fences left after the basic strip
-      - Leading prose/preamble before the JSON array
-
-    On unrecoverable failure, dispatches a single 'fix this JSON' Claude call.
     Returns (parsed_list, tokens_used_in_repair).
     """
     repair_tokens = 0
@@ -271,10 +321,9 @@ def _safe_json_loads_kris(raw: str, client, category: str, output_dir: str = Non
 
     # Cleanup pass 1 — quotes + trailing commas + array carve-out
     cleaned = raw
-    cleaned = cleaned.replace("\u201c", '"').replace("\u201d", '"')  # curly double quotes
-    cleaned = cleaned.replace("\u2018", "'").replace("\u2019", "'")  # curly single quotes
-    cleaned = re.sub(r',\s*([}\]])', r'\1', cleaned)                  # trailing commas
-    # Carve out the outermost JSON array if there is leading/trailing prose
+    cleaned = cleaned.replace("“", '"').replace("”", '"')
+    cleaned = cleaned.replace("‘", "'").replace("’", "'")
+    cleaned = re.sub(r',\s*([}\]])', r'\1', cleaned)
     m = re.search(r'\[[\s\S]*\]', cleaned)
     if m:
         cleaned = m.group(0)
@@ -283,25 +332,8 @@ def _safe_json_loads_kris(raw: str, client, category: str, output_dir: str = Non
     if parsed is not None:
         return parsed, repair_tokens
 
-    # Truncation salvage — if the response ran out of tokens mid-object,
-    # there's no closing ']'. Walk back to the last well-formed object end
-    # ('}') and close the array there. Recovers every complete KRI prefix
-    # instead of discarding the whole batch.
-    truncation_candidate = cleaned
-    open_idx = truncation_candidate.find('[')
-    if open_idx >= 0 and ']' not in truncation_candidate[open_idx:]:
-        body = truncation_candidate[open_idx:]
-        last_obj_end = body.rfind('}')
-        if last_obj_end > 0:
-            salvaged = body[: last_obj_end + 1] + ']'
-            salvaged = re.sub(r',\s*\]', ']', salvaged)
-            parsed = _try(salvaged)
-            if parsed is not None:
-                print(f"  ⚠ Salvaged {len(parsed)} KRIs from truncated {category} response.")
-                return parsed, repair_tokens
-
     # One-shot model-driven repair
-    print(f"  ⚠ JSON parse failed for {category} — invoking repair pass...")
+    print(f"  JSON parse failed for {category} — invoking repair pass...")
     repair_prompt = (
         "The following text was supposed to be a JSON array of KRI objects but failed to parse. "
         "Return ONLY a corrected JSON array with the same content (start with [ and end with ]). "
@@ -312,7 +344,7 @@ def _safe_json_loads_kris(raw: str, client, category: str, output_dir: str = Non
     try:
         rsp = client.messages.create(
             model="claude-sonnet-4-20250514",
-            max_tokens=16000,
+            max_tokens=8000,
             messages=[{"role": "user", "content": repair_prompt}],
             system="You repair JSON. You return only valid JSON arrays — nothing else.",
         )
@@ -324,18 +356,19 @@ def _safe_json_loads_kris(raw: str, client, category: str, output_dir: str = Non
         if parsed is not None:
             return parsed, repair_tokens
     except Exception as e:
-        print(f"  ⚠ Repair-pass call failed: {e}")
+        print(f"  Repair-pass call failed: {e}")
 
-    # Last resort — log raw output so the user can fix manually, return empty
+    # Last resort — log raw output, return empty
     if output_dir:
         debug_path = os.path.join(output_dir, f"_raw_{category}_unparseable.txt")
         try:
             with open(debug_path, "w", encoding="utf-8") as f:
                 f.write(raw)
-            print(f"  ⚠ Saved unparseable output to {debug_path}; returning 0 KRIs for {category}.")
+            print(f"  Saved unparseable output to {debug_path}; returning 0 KRIs for {category}.")
         except Exception:
             pass
     return [], repair_tokens
+
 
 def _strip_outer_quotes(s):
     if not isinstance(s, str):
@@ -364,6 +397,9 @@ def _normalize_kris(kris, category):
     Handles legacy outputs (single embedded-quote protocol_reference) and missing
     fields (supporting_quote, combined_ref, severity, agent_count). Drops outer
     double quotes from supporting_quote per Quality Rule 11.
+
+    NOTE: Does NOT overwrite agent_count if already set (e.g. by the 10-agent
+    panel merger). Only sets a default of 1 when the field is absent or invalid.
     """
     out = []
     for k in kris or []:
@@ -404,15 +440,81 @@ def _normalize_kris(kris, category):
             sev = "major"
         k["severity"] = sev
 
-        # agent_count — drives Step 2.6 tier classification.
-        # Single-shot LLM extraction is not a real 10-agent panel; we set it to
-        # 7 so the KRI lands in T1 (auto-keep) rather than T3 (auto-rejected).
-        if "agent_count" not in k or not isinstance(k.get("agent_count"), int):
-            k["agent_count"] = 7
+        # agent_count — preserve merger-set value; only default when absent/invalid
+        if not isinstance(k.get("agent_count"), int):
+            k["agent_count"] = 1
 
         out.append(k)
     return out
 
+
+# ─── 10-agent panel extraction ────────────────────────────────────────────────
+
+def _run_claude_panel(client, pdf_path, manifest, category, cfg, pages,
+                      output_dir, n_agents=5):
+    """Run N Claude agents in parallel (ThreadPoolExecutor). Returns list of (label, kris)."""
+    temperatures = [0.1, 0.2, 0.3, 0.15, 0.25][:n_agents]
+    agent_results = [None] * n_agents
+
+    def _call(agent_idx):
+        temp = temperatures[agent_idx]
+        kris, tokens = extract_single_call(
+            client, pdf_path, manifest, category, cfg, pages, output_dir,
+            temperature=temp
+        )
+        label = f"C{agent_idx + 1}"
+        print(f"  Claude agent {label} (temp={temp}): {len(kris)} KRIs ({tokens} tokens)")
+        return agent_idx, label, kris, tokens
+
+    total_tokens = 0
+    with ThreadPoolExecutor(max_workers=n_agents) as executor:
+        futures = {executor.submit(_call, i): i for i in range(n_agents)}
+        for future in as_completed(futures):
+            try:
+                idx, label, kris, tokens = future.result()
+                agent_results[idx] = (label, kris)
+                total_tokens += tokens
+            except Exception as e:
+                idx = futures[future]
+                print(f"  Claude agent C{idx+1} ERROR: {e}")
+                agent_results[idx] = (f"C{idx+1}", [])
+
+    # Save per-agent raw files
+    for label, kris in agent_results:
+        path = os.path.join(output_dir, f"claude_agent_{label}_{category.lower()}.json")
+        with open(path, "w") as f:
+            json.dump(kris, f, indent=2)
+
+    return agent_results, total_tokens
+
+
+def _run_gemini_panel(pdf_path, category, output_dir, n_agents=5):
+    """Run N Gemini agents via multi-turn native PDF extraction.
+    Returns list of (label, kris) tuples, or raises on unrecoverable error.
+    """
+    from gemini_extract import run_gemini_extraction_multi_turn, save_gemini_results
+
+    raw_results = run_gemini_extraction_multi_turn(
+        domain=category,
+        pdf_path=pdf_path,
+        n_agents=n_agents,
+    )
+
+    # save_gemini_results uses its own naming convention; also save our naming
+    labeled = []
+    for agent_idx, kris in raw_results:
+        label = f"G{agent_idx}"
+        # Save per-agent file with our naming convention
+        path = os.path.join(output_dir, f"gemini_agent_{label}_{category.lower()}.json")
+        with open(path, "w") as f:
+            json.dump(kris, f, indent=2)
+        print(f"  Gemini agent {label}: {len(kris)} KRIs saved")
+        labeled.append((label, kris))
+
+    return labeled
+
+
+# ─── Main extraction entry point ──────────────────────────────────────────────
 
 def run_extraction(pdf_path: str, manifest_path: str,
                    output_dir: str, categories: list = None):
@@ -422,51 +524,110 @@ def run_extraction(pdf_path: str, manifest_path: str,
     protocol_id = manifest.get("protocol_id", "UNKNOWN")
     cats = categories or ["ELIG", "SAF", "END", "OPS"]
 
+    client = anthropic.Anthropic()
+
+    with pdfplumber.open(pdf_path) as pdf:
+        total_pages = len(pdf.pages)
+
     all_results = {}
     total_tokens = 0
 
     for cat in cats:
-        print(f"\n--- {cat} ---")
+        print(f"\n{'='*50}")
+        print(f"  Domain: {cat} — {CATEGORY_LABELS.get(cat, cat)}")
+        print(f"{'='*50}")
+
+        if cat not in CATEGORY_CONFIGS:
+            print(f"  Skipping {cat} — not an in-scope domain (ELIG/SAF/END/OPS)")
+            continue
+
+        cfg = CATEGORY_CONFIGS[cat]
+        sections = manifest.get("section_map", {}).get(cat, [])
+
+        if not sections:
+            print(f"  No sections mapped for {cat} — skipping")
+            continue
+
+        pages = get_section_pages(sections, total_pages)
+        print(f"  Pages: {pages[:5]}{'...' if len(pages) > 5 else ''} ({len(pages)} total)")
+
         try:
-            result = extract_category(pdf_path, manifest, cat, output_dir)
-            if isinstance(result, tuple):
-                kris, tokens = result
-            else:
-                kris, tokens = result, 0
+            # ── Step 1: 5 Claude agents in parallel ──────────────────────────
+            print(f"\n  [Claude panel — 5 agents]")
+            claude_results, claude_tokens = _run_claude_panel(
+                client, pdf_path, manifest, cat, cfg, pages, output_dir, n_agents=5
+            )
+            total_tokens += claude_tokens
+            claude_only_mode = False
 
-            # Schema normalization — every KRI must have the SKILL.md output schema
-            # plus agent_count for the Step 2.6 tier classifier.
-            kris = _normalize_kris(kris, cat)
+            # ── Step 2: 5 Gemini agents (sequential internally) ──────────────
+            print(f"\n  [Gemini panel — 5 agents]")
+            try:
+                gemini_results = _run_gemini_panel(pdf_path, cat, output_dir, n_agents=5)
+            except Exception as gemini_err:
+                print(f"\n  WARNING: Gemini panel failed ({gemini_err})")
+                print(f"  Continuing with Claude-only mode (5 agents, max agent_count=5)")
+                gemini_results = []
+                claude_only_mode = True
 
-            all_results[cat] = kris
-            total_tokens += tokens
+            # ── Step 3: Merge & cluster all agent outputs ────────────────────
+            all_agent_kris = claude_results + gemini_results
+            total_agents = len(all_agent_kris)
+            print(f"\n  Clustering outputs from {total_agents} agents...")
 
-            # Save per-category file
+            clusters = cluster_agent_outputs(all_agent_kris)
+            merged_kris = merge_clusters(clusters)
+
+            # ── Step 4: Schema normalization (preserves agent_count) ─────────
+            merged_kris = _normalize_kris(merged_kris, cat)
+
+            # Print per-cluster summary
+            agent_count_dist = {}
+            for k in merged_kris:
+                ac = k.get("agent_count", 1)
+                agent_count_dist[ac] = agent_count_dist.get(ac, 0) + 1
+
+            print(f"  Merged: {len(merged_kris)} KRIs from {len(clusters)} clusters")
+            for ac in sorted(agent_count_dist.keys(), reverse=True):
+                print(f"    agent_count={ac}: {agent_count_dist[ac]} KRIs")
+
+            all_results[cat] = merged_kris
+
+            # ── Step 5: Save domain file ──────────────────────────────────────
+            meta = {
+                "step": "2",
+                "protocol_id": protocol_id,
+                "category": cat,
+                "kri_count": len(merged_kris),
+                "tokens_used": claude_tokens,
+                "agents_claude": len(claude_results),
+                "agents_gemini": len(gemini_results),
+                "total_agents": total_agents,
+                "claude_only_mode": claude_only_mode,
+            }
+
             out_path = os.path.join(output_dir, f"raw_{cat}.json")
             with open(out_path, "w") as f:
-                json.dump({
-                    "_meta": {"step": "2", "protocol_id": protocol_id,
-                              "category": cat, "kri_count": len(kris),
-                              "tokens_used": tokens},
-                    "kris": kris
-                }, f, indent=2)
+                json.dump({"_meta": meta, "kris": merged_kris}, f, indent=2)
             print(f"  Saved → {out_path}")
 
         except Exception as e:
             print(f"  ERROR in {cat}: {e}")
             import traceback; traceback.print_exc()
 
-    print(f"\n{'='*40}")
-    print(f"Extraction complete. Total KRIs: {sum(len(v) for v in all_results.values())}")
-    print(f"Total tokens: {total_tokens}")
+    print(f"\n{'='*55}")
+    print(f"Extraction complete.")
+    print(f"Total KRIs: {sum(len(v) for v in all_results.values())}")
+    print(f"Total Claude tokens: {total_tokens}")
     for cat, kris in all_results.items():
-        print(f"  {cat}: {len(kris)}")
+        print(f"  {cat}: {len(kris)} KRIs")
 
     return all_results
 
+
 if __name__ == "__main__":
     import argparse
-    parser = argparse.ArgumentParser(description="Step 2 — Extract KRIs from protocol")
+    parser = argparse.ArgumentParser(description="Step 2 — Extract KRIs from protocol (10-agent panel)")
     parser.add_argument("--pdf",  required=True, help="Path to protocol PDF")
     parser.add_argument("--dir",  required=True, help="Output directory (must contain manifest.json)")
     parser.add_argument("--cats", default=None,  help="Comma-separated category list, e.g. ELIG,SAF (default: ELIG,SAF,END,OPS)")
@@ -475,6 +636,7 @@ if __name__ == "__main__":
     cats = args.cats.split(",") if args.cats else None
     print(f"\n{'='*55}")
     print(f"Extracting KRIs: {os.path.basename(args.pdf)}" + (f" (categories: {cats})" if cats else " (all in-scope categories)"))
+    print(f"Mode: 10-agent panel (5 Claude + 5 Gemini) with SequenceMatcher clustering")
 
     run_extraction(
         pdf_path=args.pdf,
