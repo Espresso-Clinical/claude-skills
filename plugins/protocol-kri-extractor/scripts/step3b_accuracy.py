@@ -117,12 +117,48 @@ class PageCache:
 
 
 # ─── KRI loading ────────────────────────────────────────────────────────────
+# section_number -> start_page, populated from manifest.json by run_full_accuracy_judging.
+# Lets KRIs whose protocol_reference omits a page number still resolve to a page.
+_SECTION_PAGE_MAP = {}
+
+
+def _load_section_page_map(output_dir):
+    """Populate _SECTION_PAGE_MAP from manifest.json (section_map)."""
+    path = os.path.join(output_dir, "manifest.json")
+    if not os.path.exists(path):
+        return
+    try:
+        with open(path) as f:
+            manifest = json.load(f)
+    except Exception:
+        return
+    for sections in (manifest.get("section_map") or {}).values():
+        for sec in sections or []:
+            num = str(sec.get("section_number", "")).strip()
+            pages = sec.get("pages_approx") or []
+            if num and pages:
+                _SECTION_PAGE_MAP[num] = pages[0]
+
+
 def parse_page_from_ref(ref):
-    """Extract the first page number from a protocol_reference string."""
+    """Extract the first page number from a protocol_reference string.
+    Falls back to the manifest section-page map when no page is cited."""
     if not ref:
         return None
     m = re.search(r'(?:p\.?|pages?)\s*(\d+)', ref, re.IGNORECASE)
-    return int(m.group(1)) if m else None
+    if m:
+        return int(m.group(1))
+    # Fallback: resolve via section number (e.g. "Section 2.8" -> manifest start page)
+    if _SECTION_PAGE_MAP:
+        sec = re.search(r'(\d+(?:\.\d+)*)', ref)
+        if sec:
+            key = sec.group(1)
+            if key in _SECTION_PAGE_MAP:
+                return _SECTION_PAGE_MAP[key]
+            for sid, pg in _SECTION_PAGE_MAP.items():
+                if sid == key or sid.startswith(key + "."):
+                    return pg
+    return None
 
 
 def load_all_kris(output_dir):
@@ -506,6 +542,7 @@ def apply_corrections_and_reverify(results, all_kris_map, page_cache, client):
 # ─── Main ───────────────────────────────────────────────────────────────────
 def run_full_accuracy_judging(output_dir, pdf_path):
     client = anthropic.Anthropic()
+    _load_section_page_map(output_dir)
     all_kris_map, domain_files = load_all_kris(output_dir)
     total_kris = len(all_kris_map)
 

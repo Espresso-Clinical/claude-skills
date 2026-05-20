@@ -56,7 +56,9 @@ KRI_SCHEMA = """Each KRI must have exactly these fields:
   "category_id": "ELIG|SAF|END|OPS",
   "category_label": "full category name",
   "rule_for_llm": "Actionable CRA instruction starting with 'Verify that...' Be specific: include exact drug names, thresholds, timeframes, data sources (e.g. 'by checking medication logs'), and clinical conditions verbatim from the protocol.",
-  "protocol_reference": "Section X.X, Page N: \"verbatim quote ≤30 words from protocol\"",
+  "protocol_reference": "Section X.X, p.N — section label and page number ONLY, no embedded quote (e.g. 'Section 4.4.1, p.65')",
+  "supporting_quote": "Verbatim text copied exactly from the cited protocol page, ≤30 words, with NO outer double quotes",
+  "severity": "critical|major|minor",
   "additional_footnotes": "Footnote N: verbatim text — or null if none"
 }"""
 

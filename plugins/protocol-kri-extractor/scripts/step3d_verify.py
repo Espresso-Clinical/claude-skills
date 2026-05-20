@@ -37,10 +37,10 @@ def strip_outer_quotes(s: str) -> str:
 def extract_cited_pages(ref: str):
     """Return (start_page, end_page) from protocol_reference.
     Handles ranges like 'p.24-p.29' and single pages like 'p.46'."""
-    m_range = re.search(r'p\.(\d+)-p\.(\d+)', ref)
+    m_range = re.search(r'(?:p\.?|pages?)\s*(\d+)\s*-\s*(?:p\.?|pages?)\s*(\d+)', ref, re.IGNORECASE)
     if m_range:
         return int(m_range.group(1)), int(m_range.group(2))
-    m_single = re.search(r'p\.(\d+)', ref)
+    m_single = re.search(r'(?:p\.?|pages?)\s*(\d+)', ref, re.IGNORECASE)
     if m_single:
         pg = int(m_single.group(1))
         return pg, pg
