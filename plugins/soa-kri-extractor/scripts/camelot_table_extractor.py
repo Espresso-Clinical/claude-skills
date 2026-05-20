@@ -495,6 +495,18 @@ def merge_multipage_tables(tables_by_page):
                 val = pt["matrix"].get(key, "")
                 merged_matrix[key] = val
 
+    # Fix 2: re-derive visits_present for every merged proc from the merged
+    # matrix using only canonical visit_ids. Each page's parse result may
+    # contain non-canonical visit_ids (e.g. "26__52") when Camelot's column
+    # detection on that page doesn't align with page 1. Using the matrix
+    # (which is keyed against canonical visit_ids above) avoids that noise.
+    for proc in merged_procs:
+        proc["visits_present"] = [
+            vid for vid in visit_ids
+            if merged_matrix.get(f"{proc['name']}|{vid}") == "X"
+        ]
+        proc["visit_count"] = len(proc["visits_present"])
+
     total_x = sum(1 for v in merged_matrix.values() if v == "X")
     avg_accuracy = sum(t.accuracy for _, t in tables_by_page) / len(tables_by_page)
 

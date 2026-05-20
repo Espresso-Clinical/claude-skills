@@ -9,6 +9,10 @@ import json, sys, re, os
 import pdfplumber
 import anthropic
 
+# Ensure sibling scripts are importable when this module is run directly or
+# imported from run.py — needed for the Gemini fallback (Fix 4).
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 SYSTEM_PROMPT = """You are a clinical trial protocol expert who reads Schedule of Activities tables.
 You extract information with precision — every visit, every procedure row, every footnote verbatim.
 You always return valid JSON with no markdown fences, no prose, no extra text."""
@@ -114,25 +118,53 @@ Critical rules:
   rules mentioned in the SoA section text (not just the table)
 - Return ONLY the JSON object"""
 
-    print(f"  Calling Claude for ontology ({len(soa_pages)} pages, streaming)...")
-    with client.messages.stream(
-        model="claude-sonnet-4-20250514",
-        max_tokens=32000,
-        messages=[{"role": "user", "content": user_prompt}],
-        system=SYSTEM_PROMPT,
-    ) as stream:
-        for _ in stream.text_stream:
-            pass
-        response = stream.get_final_message()
+    raw = None
 
-    if getattr(response, "stop_reason", None) == "max_tokens":
-        raise RuntimeError(
-            f"Ontology response truncated (stop_reason=max_tokens). "
-            f"Output tokens used: {response.usage.output_tokens}. "
-            f"Raise max_tokens in step1b_ontology.py or chunk the SoA pages."
-        )
+    # Primary: Claude
+    try:
+        print(f"  Calling Claude for ontology ({len(soa_pages)} pages, streaming)...")
+        with client.messages.stream(
+            model="claude-sonnet-4-20250514",
+            max_tokens=32000,
+            messages=[{"role": "user", "content": user_prompt}],
+            system=SYSTEM_PROMPT,
+        ) as stream:
+            for _ in stream.text_stream:
+                pass
+            response = stream.get_final_message()
 
-    raw = response.content[0].text.strip()
+        if getattr(response, "stop_reason", None) == "max_tokens":
+            raise RuntimeError(
+                f"Ontology response truncated (stop_reason=max_tokens). "
+                f"Output tokens used: {response.usage.output_tokens}. "
+                f"Raise max_tokens in step1b_ontology.py or chunk the SoA pages."
+            )
+        raw = response.content[0].text.strip()
+        provider = "claude"
+        token_count = response.usage.input_tokens + response.usage.output_tokens
+
+    except Exception as claude_err:
+        # Fix 4: Gemini fallback when Claude is unavailable (credit error, rate
+        # limit, etc.). Reuses the codebase's shared call_gemini() helper so the
+        # SDK, API-key source (secrets file), and model selection stay
+        # consistent with every other Gemini call in the pipeline.
+        print(f"  ⚠ Claude unavailable ({claude_err}); falling back to Gemini...")
+        try:
+            from gemini_extract import call_gemini
+        except ImportError as imp_err:
+            raise RuntimeError(
+                f"Claude failed ({claude_err}) and the Gemini helper could not "
+                f"be imported ({imp_err}). Cannot build ontology."
+            ) from claude_err
+        raw = call_gemini(
+            user_prompt,
+            system_prompt=SYSTEM_PROMPT,
+            temperature=0,
+            task="extract",
+        ).strip()
+        provider = "gemini"
+        token_count = None
+
     raw = re.sub(r'^```[a-z]*\n?', '', raw)
     raw = re.sub(r'\n?```$', '', raw)
 
@@ -142,7 +174,8 @@ Critical rules:
         "protocol_id": manifest.get("protocol_id"),
         "source_pdf": os.path.basename(pdf_path),
         "soa_pages_read": soa_pages,
-        "tokens_used": response.usage.input_tokens + response.usage.output_tokens
+        "provider": provider,
+        "tokens_used": token_count,
     }
     return ontology
 

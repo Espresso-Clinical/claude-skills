@@ -215,7 +215,7 @@ def run_step_12(pdf, out_dir, **kw):
 def run_step_13(pdf, out_dir, **kw):
     print(f"\n[ Step 13 — {STEP_DESC['13']} ]  (BLOCKING)")
     from step3_5_orphan_scan import run_orphan_scan
-    ok = run_orphan_scan(pdf, out_dir)
+    ok = run_orphan_scan(out_dir, pdf)
     enforce("13", ok)
     return ok
 
