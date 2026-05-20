@@ -510,7 +510,23 @@ def run_orphan_scan(output_dir, pdf_path):
     # section triggered the zero-KRI emphasis prompt. Written to the report.
     section_coverage_audit = []
 
+    # Fix 7: only scan sections for domains that have a raw KRI file in the
+    # output directory. In a SOA-only run there is no raw_ELIG.json etc., so
+    # scanning those sections produces hundreds of false-positive candidates
+    # (every section shows "0 existing KRIs → emphasized scan") and makes the
+    # step extremely slow. Domains without a raw file are simply skipped.
+    active_domains = {
+        d for d in section_map
+        if os.path.exists(os.path.join(output_dir, f"raw_{d}.json"))
+    }
+    if active_domains != set(section_map.keys()):
+        skipped = set(section_map.keys()) - active_domains
+        print(f"  Restricting scan to active domains: {sorted(active_domains)} "
+              f"(skipping {sorted(skipped)} — no raw KRI file found)")
+
     for domain_key, sections in section_map.items():
+        if domain_key not in active_domains:
+            continue
         if not isinstance(sections, list):
             continue
         for section in sections:

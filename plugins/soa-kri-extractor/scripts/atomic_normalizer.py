@@ -223,6 +223,29 @@ def decompose_procedure_label(label):
     if any(_looks_like_fragment(p) for p in parts):
         return [text], False, True
 
+    # Fix 5: detect continuation-phrase splits caused by descriptive "and"
+    # connectors. In compound *procedure* lists every fragment is a standalone
+    # clinical action — it ends with a procedure-type word ("testing",
+    # "assessments", "hematology", "medications", …). When non-first fragments
+    # end with a purely descriptive noun ("disease", "characteristics",
+    # "information", "data") the original is a single compound title, not a
+    # list of distinct procedures. Example: "Demographic and baseline disease
+    # and study ulcer characteristics" → fragments end in "disease" and
+    # "characteristics" → keep whole. This check is applied only when there
+    # is no comma in the label (comma-separated labels are always valid lists).
+    NON_PROCEDURE_TAIL = {
+        "characteristics", "disease", "information", "data", "details",
+        "background", "status", "profile", "findings",
+    }
+    has_comma = "," in text
+    if not has_comma:
+        bad_tail = any(
+            p.split()[-1].lower() in NON_PROCEDURE_TAIL
+            for p in parts[1:] if p.split()
+        )
+        if bad_tail:
+            return [text], False, True
+
     if any(_is_recognized_bundle(p) for p in parts):
         if all(_is_recognized_bundle(p) or len(p.split()) <= 5 for p in parts):
             return parts, True, False
