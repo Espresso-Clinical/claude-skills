@@ -147,6 +147,7 @@ def assemble(out_dir: str, manifest_path: str) -> str:
                 F_COMBINED:  k.get(F_COMBINED) or make_combined_ref(ref, quote),
                 F_FOOTNOTES: k.get(F_FOOTNOTES, None),
                 F_SEVERITY:  k.get(F_SEVERITY, "major"),
+                "agent_count": k.get("agent_count"),
             }
             cleaned.append(entry)
 
