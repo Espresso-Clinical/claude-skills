@@ -9,10 +9,18 @@ import sys
 import json
 import pandas as pd
 
+# Columns that must be present — these are the source material the skill uses
+# to AUTHOR the Rule for LLM from scratch.
 REQUIRED_COLS = [
     "KRI ID", "Category", "KRI Name", "Description",
-    "Rule for LLM", "Protocol Reference & Quote", "Severity",
+    "Protocol Reference & Quote", "Severity",
 ]
+
+# "Rule for LLM" is NOT required on input. In the current workflow the Golden
+# Set arrives without it (or with it empty); the distiller authors it from the
+# required columns + the footnotes/quotes + the protocol PDF. If present on
+# input it is treated as a non-authoritative hint only.
+OPTIONAL_COLS = ["Rule for LLM"]
 
 
 def load_golden_set(xlsx_path: str, out_json: str) -> int:

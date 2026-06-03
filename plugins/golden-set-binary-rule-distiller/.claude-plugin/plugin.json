@@ -1,7 +1,7 @@
 {
   "name": "golden-set-binary-rule-distiller",
   "version": "1.0.0",
-  "description": "Distills a clinical-trial Golden Set into only the binary, deviation-producing rules with machine-readable rewritten Rule for LLM column, verified against the source protocol PDF.",
+  "description": "Distills a clinical-trial Golden Set into only the binary, deviation-producing rules, authoring a comprehensive machine-readable Rule for LLM column from scratch, verified against the source protocol PDF.",
   "author": {
     "name": "Espresso Clinical",
     "email": "eng@espressoclinical.com"

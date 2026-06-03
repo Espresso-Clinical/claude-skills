@@ -1,103 +1,123 @@
-# Panel review — Stages 2 and 4
+# Panel review — Stages 1 (nominate), 2 (defend), and 4 (quality)
 
-Stages 2 (panel filter) and 4 (quality audit) use parallel reviewer agents to apply consensus pressure to the keep/drop and rewrite decisions. This file gives prompt templates, vote consolidation, and consensus thresholds.
+**All panels run on Gemini 3.5 Flash at high thinking — never Claude sub-agents.** Call `gemini_extract.call_gemini(prompt, system_prompt=..., temperature=..., task="judge")` (task="judge" = high thinking budget) in parallel threads with a temperature spread (0.1–0.3) for independence. See SKILL.md "Panel engine" for the import. This file gives the prompt templates, vote consolidation, and thresholds.
 
-## When to run panel reviews
+## The filter is keep-biased: nominate, then defend
 
-- **Stage 2** runs after Stage 1 (filter). Reviewers re-evaluate the kept rules and flag any that should still be dropped. Run when the user wants more rigor than a single-pass filter.
-- **Stage 4** runs after Stage 3 (rewrite). Reviewers audit the rewritten rules for clarity, protocol-faithfulness, and correctness of Deviation Level. Run when the user wants to verify the rewrite landed cleanly.
+Dropping a rule is irreversible, so it takes TWO panels agreeing across TWO opposite tasks:
+- **Stage 1 (nominate)** casts a wide net — each reviewer flags drop candidates. A rule becomes a *candidate* on **any** drop vote. **Nothing is dropped here.**
+- **Stage 2 (defend)** is adversarial in the other direction — for each candidate, reviewers try to KEEP it. A candidate is dropped only if the defense fails; otherwise it is **restored** or **escalated to the user**.
+- An **inverse-coverage** pass then reviews the whole finalized drop list for systematic over-dropping.
 
-Both stages are optional. Default for both is "yes, run them" unless the user opts out.
+**Keep is always the default. Borderline → keep or escalate, never a silent drop.** No single reviewer can drop a rule.
 
 ## Mechanics
 
-- Spawn N parallel reviewer agents (default 10, minimum 5).
-- Each reviewer has access to the protocol PDF and the current state of the Golden Set.
-- Each reviewer flags rules they think are problematic, with a short reason.
-- Consolidate votes per rule: count how many reviewers flagged each rule.
-- Apply changes at the consensus threshold (default ≥ 4 of 10 votes).
+- Run N independent Gemini reviewers (default 5) in parallel, temperature-spread.
+- Each reviewer sees the protocol PDF (cited pages + footnotes) + the relevant rules.
+- Consolidate votes per rule/candidate; apply the stage's keep-biased threshold (below).
+- Singleton opinions are noise; multi-reviewer agreement is signal.
 
-The consensus threshold matters. Singleton flags from one reviewer are noise — they reflect that reviewer's particular reading, not a defect in the rule. Real issues get flagged by multiple reviewers independently.
-
-## Stage 2 — Panel filter prompt template
-
-When spawning each Stage 2 reviewer, use a prompt of this shape:
+## Stage 1 — Drop-nomination prompt
 
 ```
-You are reviewer #<N> of <total> doing an INDEPENDENT audit of a clinical-trial Golden Set's binary-rule filter.
+You are reviewer #<N> of <total> independently screening a clinical-trial Golden Set for rules that CANNOT be turned into a binary, deviation-producing rule.
 
-CONTEXT
-The Golden Set <protocol_id> has <X> rules across <Y> sheets. A prior filter pass classified each rule as binary-checkable or not. Your job is to find rules that should NOT have passed — rules that are actually descriptive, definitional, statistical, or otherwise NOT able to produce a clear binary deviation from data.
+KEEPABLE: a binary check can be authored — the rule has a measurable data anchor (number, date, presence/absence, category), even if the threshold is fuzzy ("approximately").
+NOMINATE FOR DROP only if the rule is primarily: a pure endpoint/population definition, statistical methodology, a reporting metric, an exploratory analysis/correlation, a permissive option ("may"), a broad meta-compliance umbrella ("follow GCP"), a pure term/threshold definition with no embedded action, a pure aspiration, or purely subjective investigator judgment with no objective anchor.
 
-FILTER CRITERIA (a rule must satisfy ALL three to be kept):
-1. Binary checkable — data either complies or doesn't.
-2. Tied to trial data — subject-, site-, or trial-level data collected/reported during the trial.
-3. Produces a clear deviation when violated — a specific anomaly can be flagged.
+KEEP IS THE SAFE DEFAULT — when unsure, do not nominate. You are flagging only the clearly non-binary.
 
-DROP if the rule is primarily:
-- Pure endpoint definition
-- Pure population definition (ITT/FAS/PP/Safety)
-- Statistical methodology (MMRM, Kaplan-Meier, hierarchical testing)
-- Reporting metrics ("% of subjects with X are reported")
-- Exploratory analyses or correlations
-- Permissive options ("sponsor may reduce enrollment...")
-- Broad meta-compliance umbrellas (generic "follow GCP")
-- Pure threshold/term definitions with no embedded action
-- Subjective judgment with no objective data anchor
+INPUTS: rules at <rules_path>; protocol PDF at <pdf> (read cited pages + footnotes).
+SOA visit×procedure rules are templated — treat as one template, flag a template issue once, don't enumerate.
 
-INSTRUCTIONS
-- Read the protocol PDF at <protocol_pdf_path> and the kept-rule JSON at <kept_rules_json_path>.
-- For each rule, cross-check against the protocol's actual text at the cited reference.
-- Treat the source `Rule for LLM` column with limited trust — it is often malformed. Read all columns holistically.
-- Be holistic and judicious. The prior pass already removed obvious non-checkable rules. Look for residual cases that slipped through.
-- The ~330 SOA visit×procedure rules typically follow a uniform template; if the template is correct, flag the TEMPLATE issue once if you find one — don't list 330 instances.
-
-OUTPUT
-A markdown table:
-| KRI ID | Sheet | Reason to Drop |
-
-After the table, give a 1-2 sentence overall verdict on filter quality.
-
-Be independent — do not anchor on any prior reviewer. Make your own judgment from the rule contents and the protocol.
+OUTPUT: ONLY strict JSON — rules you nominate to DROP:
+[{"kri_id":"...","drop_reason":"<=15 words"}]
+Return [] if none.
 ```
+Consolidate: any rule with ≥ 1 drop nomination → **candidate** (carry its nomination count + reasons). Unanimous-keep rules are locked and skip Stage 2.
+
+## Stage 2 — Drop-defense prompt (adversarial; the recovery stage)
+
+```
+You are reviewer #<N> of <total>. The rules below were NOMINATED by another panel to drop as "not binary". Your job is the OPPOSITE: for each, genuinely try to DEFEND keeping it.
+
+For each candidate decide:
+- "defend": there IS a protocol-grounded way to author a binary, deviation-producing rule — a measurable anchor, a footnote that makes it testable, OR a legitimate trial-level / site-level governance KRI (interim/enrollment trigger, cohort gating, DSMB approval, randomization stratification, IRB approval, IP accountability, etc.). State the basis.
+- "confirm": after genuinely trying, there is no objective, checkable anchor — it is truly definitional / permissive / subjective.
+
+GUARDRAIL — discretionary is NOT binary: a procedure the protocol leaves to discretion ("may", "optionally", "in a subset", "per Sponsor instruction", "per investigator judgment") is NOT defensible by arguing "if performed, presence is checkable" — discretion is not a protocol-mandated trigger, so non-performance is not a deviation → "confirm". Only "defend" a conditional rule when the trigger is a protocol-DEFINED, recorded clinical condition (e.g. "if total bilirubin abnormal", "women of childbearing potential") AND the protocol REQUIRES the action when it holds.
+
+BIAS TOWARD "defend" for genuine data-checks, but apply the guardrail above strictly. Only "confirm" if you cannot find any protocol basis to keep it.
+
+INPUTS: candidates at <candidates_path>; protocol PDF at <pdf> (read cited pages + footnotes).
+
+OUTPUT: ONLY strict JSON:
+[{"kri_id":"...","verdict":"defend"|"confirm","basis":"<=20 words"}]
+```
+Consolidate **per family** (keep-biased). First **cluster candidates that share the same protocol basis** — same footnote, same procedure repeated across visits, same "optional per Sponsor" clause (e.g. all synovial-fluid rules; all physical-performance-test rules) — and give each family ONE verdict applied to every instance (pool the family's votes; never split near-identical rules on a 1-vote margin). Then:
+- **Drop** on a clear confirm-majority: **≥ 4/5 confirm** (or ≥ ⅔ of pooled family votes). A bare 3–2 is NOT decisive.
+- **Restore** if defend ≥ 3/5 (or confirm ≤ 1).
+- **Escalate to the user** every 3–2 near-tie and every family the panel can't clearly resolve. Never auto-decide a knife-edge vote; keep is the default.
+
+## Inverse-coverage pass (single Gemini call, after Stage 2)
+
+```
+Below is the FULL list of rules a filter finalized as DROPPED, each with its reason. Review them as a SET. Identify any rule — or any whole CLASS of rule — that was wrongly removed, especially legitimate trial-level / site-level governance KRIs or anything with a real protocol-grounded data check.
+
+OUTPUT: ONLY strict JSON — rules to restore or escalate:
+[{"kri_id":"...","why_keep":"<=20 words"}]
+Return [] if the drop list is clean.
+```
+Anything returned is **restored or escalated to the user** before authoring begins.
 
 ## Stage 4 — Quality audit prompt template
 
 ```
-You are reviewer #<N> of <total> doing an INDEPENDENT audit of the rewritten `Rule for LLM` column.
+You are reviewer #<N> of <total> doing an INDEPENDENT audit of the authored `Rule for LLM` column.
 
 CONTEXT
-The Golden Set <protocol_id> has <X> rules with each `Rule for LLM` rewritten in this format:
-  SOURCE: <data the engine should pull, in plain language>
-  CHECK: <the precise compliance condition>
-  DEVIATION: <the exact condition that flags a deviation>
-A `Deviation Level` column (subject / site / trial) was also added.
+The Golden Set <protocol_id> has <X> rules with each `Rule for LLM` authored from scratch as a YAML "Protocol rule" — a data-agnostic clinical statement, with slots:
+  intent: <one-line purpose>
+  applies_to: <clinical denominator — e.g. "enrolled subjects", "every SAE", "every activated site">
+  evidence_expected: <the clinical artifact that must exist; never a table/column>
+  acceptance: <open set of sub-slots: timing / required / preferred / conditional / pass / override>
+  deviation: <the violation in clinical terms>
+  provenance: <terse section + page; NO footnote numbers>
+A `Deviation Level` column (subject / site / trial) was also assigned.
 
-YOUR JUDGMENT TASK — for every rule, decide whether the rewrite is:
-(a) Sharp, simple, machine-readable.
-(b) Internally consistent with the other columns (KRI Name, Description, Protocol Reference & Quote) AND with the protocol PDF.
-(c) Capable of producing a real binary deviation.
-(d) Tagged with the right Deviation Level.
+YOUR JUDGMENT TASK — for every rule, decide whether the authored rule is:
+(a) EXHAUSTIVE — every checkable detail in the protocol/footnotes/columns (analytes, time & acceptability windows, required-subsets, AND/OR logic, conditional triggers, pass/deviation definitions) is present. This is the priority check.
+(b) CLEAR — plain clinical language in every slot; no meta-commentary ("presence and dating only — does NOT require X"), NO footnote numbers anywhere ("[footnote 14]", "Footnote 13", even in provenance), no filler ("active subject expected to attend…").
+(c) Well-formed — valid YAML, all six top-level slots present; `applies_to` is a clinical denominator (not "randomized"/"active"/a data filter); `evidence_expected` names an artifact (not a restated criterion); no table/column/code names anywhere.
+(d) Internally consistent with the other columns AND the protocol PDF, produces a real binary deviation, and has the right Deviation Level.
 
 FLAG CATEGORIES
-- "unclear": SOURCE/CHECK/DEVIATION wording is vague or missing data.
+- "omitted-detail": a checkable detail present in the protocol/footnotes/columns is missing from the rule's slots (e.g. an acceptability window left only in the quote, an analyte dropped, an OR collapsed to AND). THE MOST IMPORTANT FLAG.
+- "jargon": meta-commentary, self-referential tags, or a footnote number ("[footnote 12]", "Footnote 14") in a slot instead of a plain clinical statement.
+- "filler": boilerplate that adds length without a check; should be trimmed.
+- "bad-denominator": `applies_to` is a data filter or wrong population ("randomized" for an eligibility criterion, "active subject").
+- "restated-criterion": `evidence_expected` restates the criterion instead of naming a clinical artifact.
+- "names-data": rule names a table/column/code/join (belongs downstream, not in the Protocol rule).
+- "unclear": a slot is vague or missing data the engine needs.
 - "inconsistent": rule contradicts/drifts from the protocol text or other Golden Set columns.
-- "non-deviation": DEVIATION doesn't describe a real anomaly.
+- "non-deviation": the `deviation` slot doesn't describe a real anomaly.
 - "wrong-level": Deviation Level mis-assigned.
-- "broken-template": SOURCE/CHECK/DEVIATION structure missing/malformed.
+- "broken-template": YAML malformed or a required slot missing.
 - "fabricated-specifics": rule introduces numbers, tolerances, or fields not present in the protocol PDF.
 
 INSTRUCTIONS
 - Read the protocol PDF at <protocol_pdf_path>.
-- For every rule, open the protocol at the cited reference and verify the rewrite against the actual protocol text.
-- The "fabricated-specifics" flag is especially important — flag any rule whose CHECK or DEVIATION introduces specifics the protocol does not authorize (invented tolerances, invented field lists, invented thresholds).
+- For every rule, open the protocol at the cited reference — AND read every footnote attached to it — and verify the authored rule against the actual protocol text.
+- "omitted-detail" is the priority flag: compare the footnotes/quotes against the rule and flag anything checkable that the protocol states but the rule does not encode.
+- "fabricated-specifics" is its mirror: flag any rule whose `acceptance`/`deviation` introduces specifics the protocol does not authorize (invented tolerances, field lists, thresholds).
 - The ~330 SOA visit×procedure rules follow a uniform template; if the template is correct, all instances pass — flag the TEMPLATE issue once if you find one, don't list 330 instances.
 
 OUTPUT
 A markdown table (cap at ~25 most material flags):
 | KRI ID | Flag | Issue (1 line) | Suggested fix (1 line) |
 
-After the table, give a 1-2 sentence overall verdict on whether the rewrite is production-ready.
+After the table, give a 1-2 sentence overall verdict on whether the authored rules are production-ready.
 
 Be independent. Verify each rule on its merits against the protocol.
 ```
@@ -109,27 +129,27 @@ After all reviewers complete:
 1. Aggregate flags per (KRI ID, sheet, flag-category) tuple.
 2. Count how many reviewers flagged each item.
 3. Sort by vote count, descending.
-4. Apply changes per the consensus threshold:
-   - **Default threshold: ≥ 4 of 10 votes** (= ≥ 40% panel consensus).
-   - Higher = more conservative (fewer changes, more confidence per change).
-   - Lower = more aggressive (more changes, more noise risk).
-5. Singleton flags (1 vote) are not acted on automatically. They get logged in the panel review xlsx for the user's awareness, but they don't drive changes.
+4. Apply changes per the stage's threshold:
+   - **Stage 1 (nominate):** any drop vote → candidate (keep-biased; the bar to *survive* is in Stage 2, not here).
+   - **Stage 2 (defend, drops):** cluster equivalent candidates into families and rule per family; drop on a clear ≥ 4/5 (or ≥⅔ pooled) confirm; restore if defend ≥ 3/5; **escalate every 3–2 near-tie**. Discretionary/optional procedures → confirm-drop (not defensible).
+   - **Stage 4 (fixes):** default ≥ majority (≥ 3/5 or ≥ 2/3). Higher = more conservative; lower = noisier.
+5. Singleton flags (1 vote) are not acted on automatically. They get logged for the user's awareness, but they don't drive changes. A panel flag that conflicts with a user-approved pattern is dismissed as noise (surface it, don't auto-apply).
 
 ## Output to panel_review.xlsx
 
 Save the consolidated panel review to a workbook with these sheets:
 
-- **Summary** — vote-tier table: how many items at each vote level (10/10, 9/10, …, 1/10), with a per-tier recommendation.
+- **Summary** — vote-tier table: how many items at each vote level (for a 5-panel: 5/5, 4/5, …, 1/5), with a per-tier recommendation.
 - **Reviewer Counts** — how many flags each reviewer raised.
 - **Consolidated Flags** — one row per flagged item, columns for KRI ID, sheet, vote count, primary flag category, each reviewer's vote and reason (or blank if they didn't flag).
 
-Color-code the consolidated-flags rows by vote tier (e.g., dark green for unanimous, light green for ≥ 7, yellow for ≥ 5, orange for ≥ 3, gray for ≤ 2).
+Color-code the consolidated-flags rows by vote tier (e.g., dark green for unanimous, lighter green for a clear majority, orange for a bare majority, gray for singletons).
 
 ## Diminishing returns — stop early
 
 The first panel pass catches the real issues. The second pass catches a few more. By the third pass you're chasing singleton opinions and over-correcting. **Default: one panel pass per stage. Cap at two.**
 
-A useful signal: if the high-consensus (≥ 7/10) flag count drops by more than 50% between iterations, you've extracted the real issues. The long tail of 1-3 vote singletons is noise from the diversity of reviewer perspectives, not real defects.
+A useful signal: if the high-consensus (clear-majority) flag count drops by more than 50% between iterations, you've extracted the real issues. The long tail of singleton (1-vote) flags is noise from the diversity of reviewer perspectives, not real defects.
 
 ## Recovering from a bad iteration
 
