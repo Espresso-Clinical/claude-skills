@@ -1,181 +1,177 @@
-# Rewrite format — SOURCE / CHECK / DEVIATION style guide
+# Authoring format — the YAML "Protocol rule"
 
-This file is the working reference for Stage 3 (rewrite `Rule for LLM`).
+This file is the working reference for Stage 3: **authoring the `Rule for LLM` from scratch**. The incoming Golden Set has no usable `Rule for LLM` — you write it fresh from the rule's columns + footnotes + the protocol PDF.
 
-## The format — exactly three lines
+The `Rule for LLM` is a **"Protocol rule"**: a *data-agnostic clinical statement of the check*, authored from the protocol alone. It is serialized as **YAML** inside the single cell.
 
-```
-SOURCE: <data the engine should pull, in plain natural language>
-CHECK: <the precise compliance condition>
-DEVIATION: <the exact condition that flags a deviation, including missing-data cases>
-```
+## What "data-agnostic" means (the protocol layer)
 
-Three lines. No preamble, no postscript, no extra fields. The Severity stays in its existing column. The Deviation Level goes into its own new column. Nothing else belongs inside `Rule for LLM`.
+The Protocol rule describes a KRI **purely from the protocol** — what to check, who's in scope, when, which items, what's a violation — in clinical terms. It carries **no knowledge of how the data is built**: no table names, no columns, no codes, no joins, no EDC/CRF field names. Resolving the rule to real data points is a separate downstream tool's job and is deliberately **outside this format**. If you catch yourself naming a table, a column, a visit-id mapping ("V1 → 'Visit 1'"), or a join, delete it — that belongs downstream, not here.
 
-## Hard rules for writing each line
+## The slots
 
-### Short and sharp
-One short sentence per line. No paragraphs. The downstream engine has to parse this — verbose prose is friction.
-
-### Natural language only
-No EDC/CRF field names. No schema references. No code-like notation.
-
-| Don't write | Write instead |
-|---|---|
-| `vitals.weight_kg` | The subject's screening body weight |
-| `cm.ae_severity_grade` | The CTCAE grade recorded on the AE form |
-| `subject_visit_log[visit_id='V2'].visit_date` | The V2 visit date |
-| `pharmacy_log.preparer_unblinded_flag` | The IP preparer's unblinded role status |
-
-The skill doesn't know the user's CRF/EDC schema and shouldn't pretend to. The downstream LLM engine will map the natural language to the actual data fields at runtime.
-
-### Never invent specifics the protocol doesn't authorize
-
-This is the single most important rule in this file. It exists because past runs failed by inventing tolerances to "make rules more binary".
-
-| Protocol says | Don't rewrite as | Do rewrite as |
-|---|---|---|
-| "approximately 30 minutes" | "between 25 and 35 minutes" | "approximately 30 minutes; flag if substantially deviates per applicable sponsor SOP" |
-| "approximately 30% of subjects" | "greater than 30% of subjects" | "approximately 30% of subjects per protocol; flag when cumulative share substantially exceeds 30%" |
-| "labeled in accordance with federal/local regulations and clearly labeled for investigational use only" | "label includes sponsor name, protocol ID, lot, storage temp, and IUO marking" (5 invented fields) | "labeled in accordance with federal/local regulations AND clearly marked 'investigational use only'" (the protocol's two clauses, verbatim) |
-| "every 4 to 6 months" | "every 3.5 to 6.5 months (4-6 mo ± 2 weeks)" | "every 4 to 6 months" |
-| "randomized 2:1" | "active arm share between 60% and 73% cumulatively" | "randomized in a 2:1 ratio per the IRT specification; flag if cumulative ratio substantially departs from 2:1" |
-| "soaked with 2× the applied volume" | "within ±10% of 2× the applied volume" | "soaked with 2× the applied volume per protocol" |
-
-The pattern: if the protocol uses fuzzy language ("approximately", "about", "ideally", "preferably"), the rewrite preserves that fuzziness. The DEVIATION line can use phrases like "substantially deviates", "substantially exceeds", or "is materially out of range per applicable sponsor SOP" — those are honest reflections that the protocol left a tolerance unspecified, and they let the downstream LLM engine apply runtime judgment without the skill having invented a number.
-
-### Include missing-data as a deviation when relevant
-
-Whenever the rule's intent is data presence, the DEVIATION line must explicitly call out missing data as a deviation cause. For example:
-
-```
-SOURCE: The V2 visit date and the randomization (Day 1) date, per subject.
-CHECK: V2 visit date is within ±3 days of (Day 1 + 14 days).
-DEVIATION: For an active subject, V2 visit date is outside this window, OR V2 visit date is missing.
+```yaml
+intent: one-line plain-English purpose
+applies_to: the clinical denominator — WHO/WHAT must satisfy this
+evidence_expected: the clinical artifact the protocol says must exist (the thing, not where it is stored)
+acceptance:            # open set of sub-slots — use ONLY the ones the rule needs
+  timing: ...          # window / acceptability window
+  required: ...        # mandatory items
+  preferred: ...       # non-mandatory but preferred
+  conditional: ...     # conditional trigger / exception
+  pass: ...            # the plain pass condition (criteria-style rules)
+  override: ...        # a documented waiver that satisfies the rule
+deviation: the violation in clinical terms, derived from applies_to + acceptance
+provenance: terse pointer only — section + page (NO footnote numbers)
 ```
 
-Without the missing-data clause, the engine might silently pass over subjects whose V2 was never recorded.
+- The six **top-level slots are always present**: `intent`, `applies_to`, `evidence_expected`, `acceptance`, `deviation`, `provenance`.
+- `acceptance` **sub-slots are an open set** — none is mandatory. Pick whichever the rule, its description, its reference, and its footnotes actually call for. The common ones are listed above; add another only if it genuinely clarifies (and keep the name plain). Footnotes become first-class clinical logic here.
+- `provenance` is a **terse pointer** (section + page; **no footnote numbers**). Do NOT repeat the verbatim quote — it already lives, untouched, in the `Protocol Reference & Quote` column.
 
-### Cross-check discipline — every rule, every time
+## Authoring rules
 
-Before writing each rule's three lines, the agent MUST:
+### 1. Comprehensiveness — harvest from every column AND every footnote
+The authored rule is the ONLY artifact the deviation engine runs on, so every checkable detail must live inside it. Sweep the columns and the footnotes/quotes behind them and fold in: analyte/parameter lists (each value in a panel), time & acceptability windows ("up to 4 days prior", "available 3 months prior is acceptable"), mandatory subsets and AND/OR logic ("sodium … and AST or ALT"), conditional triggers ("only if total bilirubin is abnormal", "for women of childbearing potential only"), and the protocol's pass-vs-deviation definition. **Never leave a checkable detail sitting only in a footnote or another column.**
 
-1. Open the protocol PDF at the cited reference (page or section in the `Protocol Reference & Quote` column).
-2. Read the surrounding context — the full paragraph or section, not just the quoted snippet.
-3. Verify the rule's intent against the protocol's actual wording.
-4. Write the three lines using only specifics that are present in the protocol text. Carry over the protocol's exact thresholds, numbers, and qualifiers.
-5. If the cited reference does not actually support the rule's intent, mark the rule as a drop candidate and surface it in the audit log. Do not fabricate.
+### 2. Clarity — plain clinical language, no meta-commentary
+Every slot must read as a clear clinical statement that both the engine and a human can act on without decoding. **Do NOT** write self-referential caveats or tags such as:
+- ❌ `completeness: "presence and dating only — does NOT require every component"`
+- ❌ `panel: "RBC, HGB, ... [footnote 12 definition]"`
 
-## Worked examples — before and after
+If individual items are **not** mandatory, simply don't list them under `required`; the `deviation` line's silence about them already means they aren't required. Put the descriptive list in `evidence_expected` instead (see SOA-014 below). Clarity is non-negotiable — a rule full of jargon is a failed rule even if it's "complete".
 
-These come from a real Golden Set run. The "Before" column shows the original (sometimes malformed) Rule for LLM. The "After" column shows the rewritten 3-line form.
+**No footnote numbers, anywhere in the rule.** Carry the footnote's *content* into the slots, but never the citation. ❌ `"... up to 4 days prior [footnote 14]"`, ❌ `"Footnote 13"`, ❌ a `provenance` of `"SoA Run-In, Footnote 14, p.26."`. ✅ `"... up to 4 days prior"`, ✅ `provenance: "SoA Run-In, p.26."`. The rule does not care which footnote number a detail came from; the numbered citation already lives, untouched, in the `Protocol Reference & Quote` column.
 
-### Example 1 — SOA visit-procedure rule
+### 3. `applies_to` is a clinical denominator, never a data filter
+Write a clinical population: "enrolled subjects", "every SAE", "every activated site", "every IP administration". **Never** adjectives like "active" or "expected to attend", and never a data filter.
+- For **eligibility criteria** the denominator is **"enrolled subjects"**: the criterion is assessed at screening, but the *deviation* is enrolling an ineligible subject — a screen failure is not a deviation.
+- **Never use "randomized"** unless the provision is specifically about the randomized phase. (In this trial the safety run-in phase is *not* randomized, so eligibility/run-in rules must not say "randomized".)
 
-Before:
-```
-D1_PRE- Verify that Eligibility assessment was performed at D1_PRE per the Schedule of Activities.
-```
+### 4. `evidence_expected` names a clinical artifact, never restates the criterion
+- ✅ "the subject's prior investigational-product / interventional-trial exposure history for the 60 days before first treatment, and any documented Sponsor approval"
+- ❌ "the eligibility determination for exclusion #22" (circular — just restates the criterion)
 
-After:
-```
-SOURCE: The Eligibility assessment record at the Day 1 pre-treatment (D1_PRE) visit, per subject.
-CHECK: Eligibility assessment was performed and dated at D1_PRE per the Schedule of Activities.
-DEVIATION: For an active subject expected to attend D1_PRE, no Eligibility assessment record exists at that visit, or the record is undated.
-```
+### 5. No filler
+Drop subject-state preambles ("for an active subject expected to attend…") and restated visit labels. Keep every clinical parameter, value, window, and condition; cut everything that adds length without adding a check.
 
-### Example 2 — Visit-window check
+### 6. Never invent specifics the protocol doesn't authorize
+Comprehensiveness means including everything the protocol *does* state — it never means inventing what it doesn't. If the protocol says "approximately 30 minutes", the rule says "approximately 30 minutes" — never "25–35 minutes". When the protocol is intentionally fuzzy, write "substantially deviates per applicable sponsor SOP" and let the downstream engine judge the margin. These two rules (comprehensive ↔ no-invent) are mirror images: exhaustive of the protocol, silent beyond it.
 
-Before:
-```
-V2- Verifies that the V2 visit occurred in Week 2 , ±3 days window.
-```
+### 7. Author to the protocol, not to the source columns
+The `Description` and `Protocol Reference & Quote` are hypotheses. If the `Description` conflicts with the protocol — e.g. a templated "±3-day window relative to randomization" where the SoA actually says the Screening window is "Day -29 to 0" — **author to the protocol** and surface the discrepancy in the audit log. Do NOT edit the Description (immutability).
 
-After:
-```
-SOURCE: The V2 (Week 2) visit date and the randomization (Day 1) date, per subject.
-CHECK: V2 visit date is within ±3 days of (Day 1 + 14 days).
-DEVIATION: For an active subject, V2 visit date is outside this ±3-day window, or the visit date is missing.
-```
+### 8. Presence-only vs required-subset (labs)
+- A **screening lab** is usually **presence-only**: put its component list in `evidence_expected` as a description, give the acceptability window in `acceptance.timing`, and make the `deviation` "no result performed/dated in the window". Do NOT add a `required` item list and do NOT add a `completeness` caveat.
+- A **pre-treatment lab** that a footnote makes mandatory ("the following must be available and reviewed prior to first treatment: …") DOES get a `required` subset (the mandatory items, with AND/OR logic) and a `preferred` full panel.
+The analyte list is a deviation trigger **only** where a footnote makes it mandatory.
 
-### Example 3 — Subject-level exclusion criterion
+## Worked examples (real rules, across the five domains)
 
-Before:
-```
-Verify that the subject is excluded if body weight is <50 kg.
-```
-
-After:
-```
-SOURCE: The subject's screening body weight.
-CHECK: Screening body weight is ≥ 50 kg.
-DEVIATION: Subject was randomized with screening weight < 50 kg, or screening weight is missing.
-```
-
-### Example 4 — Event-level timing (SAE reporting)
-
-Before:
-```
-Verify that all SAEs are reported by entering them into the CRF within 24 hours from the time the investigator first learned of the event.
+### SOA-008 — V1 Biochemistry (required-subset lab; the flagship)
+```yaml
+intent: "Pre-treatment biochemistry was available and reviewed before the first V1 dose."
+applies_to: "subjects who reached V1 (first treatment)"
+evidence_expected: "a biochemistry result usable for the V1 pre-treatment review."
+acceptance:
+  timing: "drawn up to 4 days before V1 and available/reviewed before first treatment - a recent screening draw can satisfy it"
+  required: "sodium, potassium, glucose, bilirubin, creatinine, (AST or ALT)"
+  preferred: "full panel (albumin, LDH, GGT, ALP, CRP/hsCRP, urea, total protein)"
+  conditional: "direct bilirubin only if total bilirubin is abnormal"
+deviation: "a V1 subject with no qualifying biochemistry in the window carrying the required items."
+provenance: "SoA Run-In, p.26."
 ```
 
-After:
+### SOA-014 — Screening Complete Blood Count (presence-only lab)
+```yaml
+intent: "A complete blood count was performed for the Screening visit."
+applies_to: "subjects who attended the Screening visit (Day -29 to 0)"
+evidence_expected: "a complete blood count result for Screening (red blood cell count, hemoglobin, hematocrit, MCH, MCHC, MCV, white blood cell count with differential, and platelet count)."
+acceptance:
+  timing: "performed and dated for Screening; a result available from up to 3 months before eligibility confirmation is acceptable"
+deviation: "a Screening attendee with no complete blood count performed and dated within the acceptable window."
+provenance: "SoA Run-In, p.26."
 ```
-SOURCE: Per SAE — the investigator-awareness datetime and the CRF entry datetime.
-CHECK: CRF entry occurs within 24 hours of investigator awareness.
-DEVIATION: For any SAE, CRF entry datetime is more than 24 hours after investigator awareness, or either timestamp is missing.
+Contrast with SOA-008: the components sit in `evidence_expected` (a description), there is no `required` list, and the deviation is purely about the result being absent — so individual components are not separately required, **without any caveat needed**.
+
+### SOA-059 — Screening X-ray (window + preferred + conditional)
+```yaml
+intent: "A qualifying knee X-ray supported screening eligibility."
+applies_to: "subjects who attended the Screening visit (Day -29 to 0)"
+evidence_expected: "a posteroanterior knee X-ray image read for the trial."
+acceptance:
+  timing: "taken at Screening, or within 3 months prior to screening - a recent pre-screening image can satisfy it"
+  required: "a posteroanterior image, read centrally"
+  preferred: "acquired using a fixed-flexion frame; central read within ~7 business days"
+  conditional: "a local/regional expert read is acceptable only if approved by the Sponsor"
+deviation: "a Screening attendee with no qualifying posteroanterior knee X-ray within the acceptable window (or read locally without Sponsor approval)."
+provenance: "SoA Run-In, p.26."
 ```
 
-### Example 5 — Site-level threshold
+### ELIG-EXC-022 — Recent-IP exclusion (pass + override; eligibility denominator)
+```yaml
+intent: "Subject had no other IP / interventional-trial participation within 60 days of first treatment (exclusion #22)."
+applies_to: "enrolled subjects"
+evidence_expected: "the subject's prior investigational-product / interventional-trial exposure history for the 60 days before first treatment, and any documented Sponsor approval."
+acceptance:
+  pass: "no IP receipt or interventional-trial participation in the 60 days before first treatment"
+  override: "documented Sponsor approval waives the criterion"
+deviation: "an enrolled subject who received an IP or participated in another interventional trial within 60 days before first treatment without documented Sponsor approval."
+provenance: "§8.2 p.62, Exclusion #22."
+```
+Note `applies_to: "enrolled subjects"` — NOT "randomized" (assessed at screening; the deviation is enrolling someone ineligible).
 
-Before:
-```
-Verify that phage preparations are stored at <= -80 degrees C and remain frozen until just prior to administration.
-```
-
-After:
-```
-SOURCE: The IP-storage freezer temperature log and per-vial thaw timestamps, per site.
-CHECK: Every freezer reading is ≤ −80 °C AND each vial remains frozen until just before dose preparation.
-DEVIATION: Any freezer reading > −80 °C, or any vial thawed before dose-prep start.
-```
-
-### Example 6 — Fuzzy protocol target (the trap)
-
-Before:
-```
-Verify IV infusion duration is approximately 30 minutes.
-```
-
-After (CORRECT — preserves protocol's fuzziness):
-```
-SOURCE: Per IV-dosing session — infusion start and stop timestamps.
-CHECK: Infusion duration matches the protocol target of approximately 30 minutes.
-DEVIATION: Any infusion duration substantially deviates from 30 minutes per applicable sponsor SOP, or either timestamp is missing.
+### SAF-AE-010 — SAE 24-hour reporting (timing; per-event denominator)
+```yaml
+intent: "Each SAE was reported to the Sponsor within 24 hours of awareness."
+applies_to: "subjects who had a Serious Adverse Event (evaluated per SAE)"
+evidence_expected: "the investigator-awareness time and the SAE-form submission time to the Sponsor."
+acceptance:
+  timing: "SAE form submitted to the Sponsor no later than 24 hours after the investigator becomes aware"
+deviation: "an SAE reported to the Sponsor more than 24 hours after investigator awareness."
+provenance: "§15.6 p.84."
 ```
 
-After (WRONG — invents tolerances):
-```
-SOURCE: Per IV-dosing session — infusion start and stop timestamps.
-CHECK: Infusion duration is between 25 and 35 minutes.
-DEVIATION: Any infusion duration < 25 min or > 35 min, or either timestamp is missing.
+### OPS-COMP-003 — EC/IRB approval before activation (site denominator)
+```yaml
+intent: "Each site's EC/IRB approval was received before it was activated."
+applies_to: "every activated site"
+evidence_expected: "the unconditional EC/IRB Letter of Approval and its receipt date, and the site activation date."
+acceptance:
+  timing: "the EC/IRB Letter of Approval is received by the Sponsor before site activation"
+  required: "the letter specifically identifies the approved documents"
+deviation: "a site activated on or before the EC/IRB Letter of Approval was received."
+provenance: "§17.1.2 p.94."
 ```
 
-The wrong version invents the 25-35 bound. The protocol never says where the line is. A 24-min infusion is not a protocol violation — the protocol doesn't define it that way.
+### END-OBL-032 — Run-in dose de-escalation (trial-level conditional action)
+```yaml
+intent: "Dosing was de-escalated to Dose -1 when Dose 1 safety/tolerability could not be confirmed."
+applies_to: "the trial (run-in dose-escalation decision)"
+evidence_expected: "the STC outcome for Allocetra Dose 1 (50x10^6 cells) and the dose used for the subsequent cohort/injections."
+acceptance:
+  pass: "if safety/tolerability of Dose 1 (50x10^6 cells) cannot be confirmed, the dose is de-escalated to Dose -1 (25x10^6 cells, cohort -1)"
+  conditional: "per the run-in plan, Cohort -1 is triggered if >=1 Cohort 0 subject fails STC after the 1st injection, or >=1 Cohort 1 subject fails STC after any injection"
+deviation: "Dose 1 safety/tolerability not confirmed, yet dosing was not de-escalated to Dose -1."
+provenance: "§2 p.22-23 (run-in plan §6.1.1 p.46)."
+```
 
 ## Common pitfalls
 
-- **Stuffing two checks into one rule.** If the protocol describes two distinct conditions, split into two atomic rules (or two atomic sub-rules: e.g., `ELIG-INC-013a` and `ELIG-INC-013b`). Don't write a compound DEVIATION line saying "report each sub-condition separately" — that's a punt to the engine.
-- **Cross-referencing other rule IDs in the rule body.** "Exclude AEs already covered by SAF-025/026/027/028." The engine reads rules independently and shouldn't have to track inter-rule dependencies. State the exclusion condition in clinical terms ("exclude ALT/AST elevations").
-- **Adding 'engine output guidance' inside the rule.** Phrases like "report each sub-condition separately" or "the engine should aggregate by subject" don't belong in the rule body. They're meta-guidance, not the check itself.
-- **Adding subjective filters that aren't measurable.** "Flag if the investigator considers it abnormal" turns a binary rule into a judgment call. Use the actual data threshold.
-- **Re-encoding the same provision in two sheets.** If the same protocol provision shows up in both ELIG and OPS, surface the duplication in the audit log. Don't silently merge or rewrite both rules — that's a user-authorization decision.
+- **Naming data structures.** Any table/column/code/join belongs downstream, never in the rule.
+- **Meta-commentary in a slot.** "presence and dating only", "[footnote X definition]", "contrast SOA-008" — all jargon. State the clinical fact plainly; let `required`/`deviation` carry the logic.
+- **`applies_to` as a data filter or "randomized".** Use the clinical denominator; eligibility → "enrolled subjects".
+- **`evidence_expected` restating the criterion.** Name the artifact (a history, an assessment, a finding, a result, a letter).
+- **Leaving a footnote out of the logic.** A window or required-subset in a footnote MUST enter `acceptance`, not stay a quote.
+- **Inventing tolerances.** Preserve the protocol's fuzziness.
+- **Editing an existing column to "fix" it.** Author to the protocol and flag the discrepancy in the audit log; never touch the source cell.
 
 ## Validation
 
-After writing all the rewrites, run `scripts/validate_rule_format.py` to confirm:
-- Every rule's `Rule for LLM` value contains `SOURCE:`, `CHECK:`, and `DEVIATION:` each on its own line.
-- No rule has a fourth line beyond those three.
-- The `Deviation Level` column is populated with `subject`, `site`, or `trial`.
+After authoring all rules, run `scripts/validate_rule_format.py` to confirm, for every `Rule for LLM` cell:
+- it parses as **valid YAML**;
+- it contains the six required top-level slots (`intent`, `applies_to`, `evidence_expected`, `acceptance`, `deviation`, `provenance`);
+- `acceptance` is a non-empty mapping (sub-slots open — the validator does not enforce specific sub-slot names);
+- the `Deviation Level` column is populated with `subject`, `site`, or `trial`.
 
-If any rule fails validation, fix it before producing the final xlsx.
+Fix any rule that fails before producing the final xlsx.

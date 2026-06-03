@@ -1,6 +1,6 @@
 # Deviation Level — subject / site / trial
 
-Every rewritten rule gets a `Deviation Level` value: one of `subject`, `site`, or `trial`. This tells the downstream engine the granularity of the flag — at which level the deviation should be reported and aggregated.
+Every authored rule gets a `Deviation Level` value: one of `subject`, `site`, or `trial`. This tells the downstream engine the granularity of the flag — at which level the deviation should be reported and aggregated.
 
 ## The three levels
 
@@ -9,13 +9,14 @@ Every rewritten rule gets a `Deviation Level` value: one of `subject`, `site`, o
 Use `subject` when the deviation is tied to data about an individual study subject. Most rules are subject-level.
 
 Examples:
-- Inclusion/exclusion criteria (each subject either meets or fails the criterion)
+- Inclusion/exclusion criteria (each subject either meets or fails the criterion). Note: the denominator is **enrolled subjects** — the criterion is assessed at screening, but the deviation is *enrolling* an ineligible subject; a screen failure is not a deviation.
 - Visit-procedure adherence (each subject either had the procedure or didn't)
 - AE reporting timing (the AE belongs to a specific subject)
 - AE field-completeness (the AE belongs to a specific subject)
-- Stopping-rule triggers (the lab value or AE belongs to a specific subject)
+- Stopping/discontinuation-rule triggers applied per subject (e.g. "no further injection if STC not confirmed within 4 weeks" — the trigger and the subsequent injection belong to one subject)
+- Randomization-stratification correctness (each subject's assigned stratum vs their own baseline value — a per-subject mis-stratification). This is `subject`, distinct from the randomization *ratio*, which is `trial`.
 - Pregnancy reporting, contraception compliance (per-subject status)
-- Per-dose administration parameters (volume, duration, route) — each dose ties to a subject
+- Per-dose administration parameters (volume, duration, route, post-dose observation, who administered) — each dose ties to a subject
 
 **Subtlety on AE rules:** AE timeliness and field-completeness rules look like they could be "site CRF data quality", but the deviation occurs per subject because each AE belongs to a subject. Aggregating across a site is one analytic view of the same subject-level data; that's the engine's job, not the rule's.
 
@@ -48,6 +49,10 @@ Examples:
 - DMC composition (≥ 3 members), DMC meeting cadence, DMC reports
 - Randomization ratio (e.g., 2:1 across all randomized subjects)
 - Enrollment caps (e.g., digit-DFO ≤ 30% of cumulative randomized)
+- Interim-analysis trigger (e.g., "interim once ≥ 50 patients completed 3 months follow-up")
+- Cohort-initiation gating (e.g., "Cohort 1 starts only after all Cohort 0 met STC after the 1st injection")
+- Run-in dose-escalation / de-escalation decisions (e.g., de-escalate to Dose -1 if Dose 1 STC cannot be confirmed)
+- DSMB review/approval of dose-escalation-plan changes
 - Final analysis timing and blinding scope
 - Sponsor early-termination authority
 
@@ -67,7 +72,9 @@ These are areas where reasonable reviewers disagree. The default below is what p
 - **Per-AE timeliness (CRF entry within 24h/72h):** `subject`. Same logic.
 - **Per-dose administration parameters (e.g., IV bag volume):** `subject` when the dose is administered to a subject; `site` only if the rule is about pharmacy prep quality independent of any specific dose.
 - **Container labeling, blinded prep:** `site`. Quality of the pharmacy process.
+- **Stratified-randomization correctness:** `subject` (a single subject's stratum-vs-baseline mismatch is one flag). Don't confuse with the randomization *ratio*, which is `trial`.
 - **Cross-sheet duplicates with different levels:** flag the duplicate in the audit log; align levels when the dedupe is authorized.
+- **`Deviation Level` is skill-assigned, not inherited.** Even if the input already carries a value, re-derive it for every rule and overwrite — never assume the input is correct.
 
 ## Avoiding common mistakes
 

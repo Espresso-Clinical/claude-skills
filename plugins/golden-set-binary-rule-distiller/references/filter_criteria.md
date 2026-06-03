@@ -1,6 +1,10 @@
 # Filter criteria — keep/drop rubric
 
-This file is the working reference for Stage 1 (binary filter) and Stage 2 (panel filter). The goal: keep ONLY rules that can produce a binary deviation from trial data, anchored in the protocol.
+This file is the working reference for Stage 1 (drop nomination) and Stage 2 (drop defense). The goal: keep ONLY rules that can produce a binary deviation from trial data, anchored in the protocol.
+
+The filter is an **authoring-feasibility test**: a rule is kept iff a binary, unambiguously-testable `Rule for LLM` can be authored for it from the protocol (the incoming Golden Set has no usable `Rule for LLM` — Stage 3 authors it).
+
+**This rubric is keep-biased and runs across two panels (both Gemini 3.5 Flash, high thinking):** in **Stage 1** a panel *nominates* drop candidates (any drop vote makes a rule a candidate — keep is the default); in **Stage 2** a second panel *defends* each candidate, ruling **equivalent rules as one family**: a family is dropped only on a clear **≥ 4/5 confirm** (or ≥ ⅔ of pooled family votes), restored if the defense reaches ≥ 3/5, and **every 3–2 near-tie is escalated to the user**. No single reviewer drops a rule, and no rule is dropped on a knife-edge vote. Discretionary/optional procedures are not defensible (see drop list). The criteria below are what every reviewer applies; "lean toward drop" never means "drop on one opinion" — it means "nominate for the defense panel."
 
 ## The three filter criteria (a rule must satisfy ALL three to be kept)
 
@@ -20,12 +24,12 @@ Crisp number, no qualifier. The engine compares the lab value to 8× ULN — str
 ### Case B — Numeric target with soft qualifier (still binary, with judgment at edges)
 > "Infused IV over **approximately 30 minutes**."
 
-There IS a concrete target (30 min). The "approximately" signals that the protocol doesn't define an exact tolerance, but the target itself is measurable. **KEEP** — and in the Stage 3 rewrite, preserve the "approximately 30 minutes" wording. The downstream LLM engine reads the rule + the actual duration and uses judgment for borderline cases. The rule still produces a binary outcome (flag/no-flag) at runtime, even if the boundary is judgment-based at the margin.
+There IS a concrete target (30 min). The "approximately" signals that the protocol doesn't define an exact tolerance, but the target itself is measurable. **KEEP** — and in the Stage 3 authoring, preserve the "approximately 30 minutes" wording. The downstream LLM engine reads the rule + the actual duration and uses judgment for borderline cases. The rule still produces a binary outcome (flag/no-flag) at runtime, even if the boundary is judgment-based at the margin.
 
 ### Case C — Pure aspirational, no measurable anchor (NOT binary)
 > "Topical should be administered before antibiotics **when feasible**."
 
-No target, no threshold, no measurable attribute — only an aspiration. There's no data point that, by itself, produces a deviation. **DROP at Stage 1.**
+No target, no threshold, no measurable attribute — only an aspiration. There's no data point that, by itself, produces a deviation. **Nominate for drop** (Stage 1) — it has no anchor to defend, so the defense panel will confirm it.
 
 ### The principle behind A/B/C
 
@@ -43,6 +47,7 @@ Drop any rule that is primarily:
 - **Reporting metrics.** "% of subjects with X are reported." These describe what gets summarized in a CSR, not what gets flagged in monitoring.
 - **Exploratory analyses or correlations.** "Correlation between anti-phage antibodies and treatment outcome." Hypothesis-generating, not pass/fail.
 - **Permissive options.** "Sponsor may reduce enrollment to N subjects." Authority statements, not protocol violations.
+- **Discretionary / optional procedures.** Anything performed at someone's discretion — "may be performed", "optionally", "in a subset", "per Sponsor instruction", "per investigator judgment". DROP. **These are NOT rescued by an "if it was performed, its presence is checkable" argument** — discretion is not a protocol-mandated trigger, so non-performance can't be a deviation. Distinguish from a **conditional-mandatory** rule — "if [protocol-defined, recorded clinical condition], then [action] is required" (e.g. "direct bilirubin if total bilirubin is abnormal"; "pregnancy test for women of childbearing potential") — which is KEEPABLE because the trigger is a defined recorded condition and the action is required when it holds.
 - **Broad meta-compliance umbrellas.** Generic "follow GCP / 21 CFR / Helsinki" with no discrete data check.
 - **Pure term or threshold definitions** with no embedded action. "A significant pathogen is >10⁶ CFU per plate." Defines a threshold used elsewhere; doesn't itself trigger a deviation.
 - **Pure aspirations** with no measurable anchor (Case C above).
@@ -68,15 +73,14 @@ If the cited reference doesn't actually support the rule's intent — i.e., the 
 
 ## Holistic judgment — read every column
 
-Treat the `Rule for LLM` text in the source Golden Set with **limited trust**. It is often the most malformed column. The Description and Protocol Reference & Quote are usually more reliable, but still not authoritative. The protocol PDF is the only authority.
-
-Judge holistically across:
+The incoming columns are hypotheses, not authority. The protocol PDF is the only authority. Judge holistically across:
 - **KRI ID** — sometimes encodes the visit, the criterion number, the category.
 - **Category / KRI Name** — high-level intent.
-- **Description** — usually a tighter restatement than Rule for LLM.
-- **Rule for LLM** — limited trust; often the most malformed.
-- **Protocol Reference & Quote** — the citation. Open the PDF here.
+- **Description** — a restatement of intent; verify against the PDF.
+- **Protocol Reference & Quote** — the citation. Open the PDF here, and read every footnote attached to the cell — footnotes carry the analytes, windows, and conditions the authored rule will need.
 - **Severity** — context for the rule's importance.
+
+(There is no usable incoming `Rule for LLM` to weigh — that column is authored in Stage 3.)
 
 ## Template-level evaluation
 
@@ -90,7 +94,7 @@ Watch for template traps:
 - Rules applied to UNS (unscheduled) visits — UNS has no protocol-required schedule, so per-procedure-at-UNS rules need to fire conditionally on what triggered the unscheduled visit.
 - Rules applied to procedures tied to specific dosing routes (e.g., solicited AEs at IV-dosing sessions) but propagated to non-dosing visits — these need scoping.
 
-When you find a template trap, decide on the right scope by reading the SoA footnotes in the PDF. Either drop the out-of-scope instances or rewrite their Rule for LLM to include the conditional gate.
+When you find a template trap, decide on the right scope by reading the SoA footnotes in the PDF. Either drop the out-of-scope instances or author their Rule for LLM with the conditional gate.
 
 ## Common pre-existing source-file bugs to flag (not silently fix)
 
@@ -100,6 +104,5 @@ Surface these in the audit log, do not silently fix:
 - **Truncated protocol-quote text.** Citation ends mid-word or mid-sentence.
 - **Copy-paste boilerplate descriptions.** Same Description text reused on rules that mean different things.
 - **Mis-anchored protocol references.** Citation pointing at a section that doesn't support the rule.
-- **Truncated or malformed Rule for LLM text.** Sentence fragments.
 
 Per the hard constraints, only fix these on explicit user authorization.
