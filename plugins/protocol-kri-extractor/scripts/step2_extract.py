@@ -17,7 +17,7 @@ import json, sys, re, os
 import pdfplumber
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from difflib import SequenceMatcher
-from scope_signature import scope_conflict  # Fix #6 — scope-aware clustering
+from scope_signature import scope_conflict, kri_identity  # scope-aware clustering + identity (Item 2)
 
 # Mandatory SOA-exclusion block injected into every domain extractor prompt.
 SOA_EXCLUSION_BLOCK = """
@@ -73,10 +73,9 @@ KRI_SCHEMA = """Each KRI must have exactly these fields:
 {
   "kri_id": "CATEGORY-SUBCATEGORY-NNN  e.g. ELIG-INC-001, SAF-AE-001, END-PRI-001, OPS-IMP-001",
   "kri_name": "Short name, max 8 words",
-  "description": "1-2 sentences: what protocol requirement this monitors and why it matters",
+  "description": "2-3 sentences stating the verifiable requirement WITH its exact specifics — drug names, doses, thresholds, timing windows, analytes, population/visit scope, and any condition — copied faithfully from the protocol. The description + supporting_quote carry the rule's full content (the downstream distiller authors the machine rule from them). Do NOT write a 'Verify that...' instruction.",
   "category_id": "ELIG|SAF|END|OPS",
   "category_label": "full category name",
-  "rule_for_llm": "Actionable CRA instruction starting with 'Verify that...' Be specific: include exact drug names, thresholds, timeframes, data sources (e.g. 'by checking medication logs'), and clinical conditions verbatim from the protocol.",
   "protocol_reference": "Section X.X, p.N — section label and page number ONLY, no embedded quote (e.g. 'Section 4.4.1, p.65')",
   "supporting_quote": "Verbatim text copied exactly from the cited protocol page, ≤30 words, with NO outer double quotes",
   "severity": "critical|major|minor",
@@ -95,8 +94,7 @@ CATEGORY_CONFIGS = {
 - Inclusion: ELIG-INC-001, ELIG-INC-002, ...
 - Exclusion: ELIG-EXC-001, ELIG-EXC-002, ...
 - Multi-part criteria (e.g. 5a, 5b): one KRI per lettered sub-part
-- rule_for_llm: "Verify that [specific requirement] is documented/confirmed" for inclusion
-- rule_for_llm: "Verify the absence of [condition]..." or "Verify that [exclusion] is not present" for exclusion
+- Capture the criterion's exact requirement (inclusion) or excluded condition (exclusion) in the description
 - Include exact numeric thresholds, timeframes, and clinical terms verbatim
 - Lab abnormality thresholds: list each parameter and its threshold value"""
     },
@@ -208,12 +206,12 @@ def cluster_agent_outputs(all_agent_kris):
     clusters = []
     for agent_label, kris in all_agent_kris:
         for kri in kris:
-            norm = normalize_rule(kri.get("rule_for_llm", ""))
+            norm = normalize_rule(kri_identity(kri))
             if not norm:
                 continue
             placed = False
             for cluster in clusters:
-                rep_norm = normalize_rule(cluster[0]["kri"].get("rule_for_llm", ""))
+                rep_norm = normalize_rule(kri_identity(cluster[0]["kri"]))
                 if rules_similar(norm, rep_norm):
                     cluster.append({"kri": kri, "agent_label": agent_label})
                     placed = True
@@ -224,8 +222,8 @@ def cluster_agent_outputs(all_agent_kris):
 
 
 def pick_representative(cluster):
-    """Pick the KRI with the longest rule_for_llm as the representative."""
-    return max(cluster, key=lambda x: len(x["kri"].get("rule_for_llm", "") or ""))
+    """Pick the KRI with the richest description as the representative."""
+    return max(cluster, key=lambda x: len(x["kri"].get("description", "") or ""))
 
 
 def merge_clusters(clusters):
@@ -305,6 +303,9 @@ def _normalize_kris(kris, category):
     for k in kris or []:
         if not isinstance(k, dict):
             continue
+        # Item 2: rule_for_llm is no longer part of the schema — drop it if an
+        # agent emitted one anyway (the downstream distiller authors it from scratch).
+        k.pop("rule_for_llm", None)
         # category_id / category_label
         k.setdefault("category_id", category)
         k.setdefault("category_label", CATEGORY_LABELS.get(category, category))

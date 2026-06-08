@@ -29,7 +29,7 @@ import os
 import re
 import sys
 
-from scope_signature import scope_conflict  # Fix #6 — never merge different-scope KRIs
+from scope_signature import scope_conflict, kri_identity  # never merge different-scope KRIs; dedup identity (Item 2)
 
 
 DOMAINS = ["ELIG", "SAF", "END", "OPS"]
@@ -84,9 +84,9 @@ def _normalize(text):
 
 def _is_soa_flavored(kri):
     """Pass 0 detector: is this KRI essentially a SOA-flavored rule?"""
-    rule = kri.get("rule_for_llm") or ""
     name = kri.get("kri_name") or ""
-    haystack = f"{name} || {rule}"
+    desc = kri.get("description") or ""
+    haystack = f"{name} || {desc}"
     return bool(SOA_FLAG_RE.search(haystack))
 
 
@@ -116,7 +116,7 @@ def dedup(raw_by_domain):
                 "duplicate_of": None,
                 "reason": "SOA-flavored — handled by soa-kri-extractor",
                 "rule_type": "out_of_scope_soa",
-                "rule_preview": (k.get("rule_for_llm") or "")[:120],
+                "preview": (k.get("description") or "")[:120],
             })
 
     # ── Pass 1 — Identical kri_id collisions within a domain ────────────────
@@ -147,7 +147,7 @@ def dedup(raw_by_domain):
     for k in all_kris:
         if id(k) in soa_dropped_ids or id(k) in dup_id_drops:
             continue
-        rule = _normalize(k.get("rule_for_llm", ""))
+        rule = _normalize(kri_identity(k))
         sec = _section_id(k.get("protocol_reference") or "")
         if not rule:
             continue
@@ -181,7 +181,7 @@ def dedup(raw_by_domain):
             # different time-scopes (prior vs during) or study phases. These are
             # atomization splits, not duplicates. (No-op while grouping is by
             # identical rule text; protective if the dedup key ever loosens.)
-            if scope_conflict(keeper.get("rule_for_llm") or "", loser.get("rule_for_llm") or ""):
+            if scope_conflict(keeper.get("description") or "", loser.get("description") or ""):
                 kept_log.append({
                     "kri_id_a": keeper["kri_id"],
                     "kri_id_b": loser["kri_id"],
@@ -214,12 +214,12 @@ def dedup(raw_by_domain):
         # Keep the KRI with the richer description; drop the rest
         ranked = sorted(
             live,
-            key=lambda x: -len((x.get("description") or "") + (x.get("rule_for_llm") or "")),
+            key=lambda x: -len(x.get("description") or ""),
         )
         keeper = ranked[0]
         for loser in ranked[1:]:
             # Scope Merge Guard (Fix #6) — keep both if scopes differ.
-            if scope_conflict(keeper.get("rule_for_llm") or "", loser.get("rule_for_llm") or ""):
+            if scope_conflict(keeper.get("description") or "", loser.get("description") or ""):
                 kept_log.append({
                     "kri_id_a": keeper["kri_id"],
                     "kri_id_b": loser["kri_id"],
