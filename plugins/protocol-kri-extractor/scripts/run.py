@@ -26,6 +26,7 @@ Usage — legacy registry (the 3 internal test protocols):
 Step order (from SKILL.md Phase 1 → Phase 4):
   1a         Manifest (ELIG/SAF/END/OPS sections only — SOA out of scope)
   2          KRI extraction (per domain, multi-model panel)
+  2.5        Section obligation inventory (per domain, high-recall yardstick)
   2.6        Auto-judgment for T2 + T3-promoted KRIs (6-judge neutral panel)
   3.5        Protocol-wide orphan scan                     [BLOCKING]
   3a         Completeness check (obligation-inventory based) + H4 SAF heuristic
@@ -81,6 +82,7 @@ LEGACY_PROTOCOLS = {
 STEP_CATALOG = [
     ("1a",          "Manifest — cover pages + TOC → section map (ELIG/SAF/END/OPS)", False),
     ("2",           "KRI extraction (per-domain, multi-model panel; ELIG/SAF/END/OPS)", False),
+    ("2.5",         "Section obligation inventory (per-domain, high-recall, no marker pre-filter)", False),
     ("2.6",         "Auto-judgment for T2 + T3-promoted KRIs (6-judge panel)",    False),
     ("3.5",         "Protocol-wide orphan scan (3 Claude + 3 Gemini)",            True),
     ("3a",          "Completeness (obligation-inventory based) + H4 SAF heuristic", False),
@@ -264,6 +266,28 @@ def run_step_4a_dedup(pdf, out_dir, **kw):
     return True
 
 
+def run_step_2_5(pdf, out_dir, **kw):
+    """Step 2.5 — Section obligation inventory, per domain.
+
+    Builds {domain}_obligation_inventory.json (the completeness yardstick Step 3A
+    consumes). High-recall capture of every conduct-constraining statement — no
+    obligation-marker pre-filter. Does NOT create KRIs and does NOT block.
+    """
+    from step2_5_obligation_inventory import run_obligation_inventory_for_domain
+    print(f"\n[ Step 2.5 — {STEP_DESC['2.5']} ]")
+    manifest_path = os.path.join(out_dir, "manifest.json")
+    domains = kw.get("categories") or ["ELIG", "SAF", "END", "OPS"]
+    if isinstance(domains, str):
+        domains = [d.strip() for d in domains.split(",")]
+    ok_all = True
+    for domain in domains:
+        ok = run_obligation_inventory_for_domain(
+            out_dir=out_dir, domain=domain, pdf_path=pdf, manifest_path=manifest_path,
+        )
+        ok_all = ok_all and ok
+    return ok_all
+
+
 def run_step_2_6(pdf, out_dir, **kw):
     """Step 2.6 — Auto-judgment for every T2 + T3-promoted KRI, per domain.
 
@@ -317,6 +341,7 @@ def run_step_4b(pdf, out_dir, **kw):
 STEP_RUNNERS = {
     "1a":          run_step_1a,
     "2":           run_step_2,
+    "2.5":         run_step_2_5,
     "2.6":         run_step_2_6,
     "3.5":         run_step_3_5,
     "3a":          run_step_3a,

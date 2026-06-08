@@ -105,7 +105,7 @@ The monitor maintains and checks this artifact checklist throughout execution:
 | 2 (multi-model) | 5 Claude agent outputs + 5 Gemini agent outputs per domain | |
 | 2 (consensus) | Tier 1 auto-approved, Tier 2 decision table shown to user, Tier 3 → promotion pipeline (`{domain}_tier3_filtered.json`) | |
 | 2 (per-domain checkpoint) | `{domain}_manual_review_decisions.json` — user acceptance/rejection record for all T2 + promoted T3 KRIs | |
-| 2.5 (obligation inventory) | `{domain}_obligation_inventory.json` — all obligation sentences found, with KRI coverage check | |
+| 2.5 (obligation inventory) | `{domain}_obligation_inventory.json` — high-recall inventory of every conduct-constraining statement (NO obligation-marker pre-filter); the yardstick Step 3A measures coverage against | |
 | **3.5** | **`orphan_scan_report.json` (primary section sweep + secondary page sweep + consolidation + cross-check + classification + user decisions + promoted orphans appended to `raw_{DOMAIN}.json`). SOA-flavored candidates dropped with reason `out_of_scope_soa`.** | |
 | 3A | `gaps_report.json` (obligation-inventory coverage) + H4 SAF heuristic | |
 | **3B** | **`accuracy_report_full.json` (100% KRI coverage, 5-judge cross-model panel, 0 FAIL, 0 unresolved FLAG — blocking)** | |
@@ -510,24 +510,30 @@ Extraction for the 4 in-scope domains (ELIG, SAF, END, OPS) uses a **10-agent mu
 
 ### Step 2.5 — Section Obligation Inventory (MANDATORY, runs after each domain extraction)
 
-After completing the 10-agent extraction for a domain (and before proceeding to Phase 3), run a **Section Obligation Inventory** for that domain's assigned protocol sections. This step catches obligations that all agents missed.
+After completing the 10-agent extraction for a domain (and before Step 2.6), build a **Section Obligation Inventory** for that domain's mapped protocol sections. This is the **completeness yardstick** that Step 3A uses to measure coverage and block on gaps. It is implemented by `scripts/step2_5_obligation_inventory.py` and runs as pipeline Step `2.5` (between Step 2 and Step 2.6).
 
 **Process:**
 
-1. **Scan every sentence** in the domain's protocol sections for obligation markers:
-   - Hard obligations: "must", "shall", "is required to", "is prohibited"
-   - Temporal obligations: "within [N] hours/days/weeks", "no later than", "at least [N] days before"
-   - Submission obligations: "submitted to", "reported to", "notified", "communicated to"
-   - Definitional boundaries: "is defined as", "does not include", "is not [X] when", "excludes"
-   - Dose/threshold triggers: "if [condition], then [action]", "≤ [value]", "≥ [value]"
+1. **Capture every conduct-constraining statement, with MAXIMUM RECALL — NO obligation-marker pre-filter.** Do NOT restrict to "must / shall / prohibited / within-N". Capture, equally:
+   - obligations and requirements (with or without "must"/"shall")
+   - **permissions and conditional permissions** ("X is permitted if the dosage is stable …")
+   - prohibitions and restrictions
+   - definitions and definitional boundaries ("X is defined as …", "X does not include …")
+   - timing / window rules and schedules
+   - thresholds and dose / limit triggers
+   - methods / how-to-perform statements
+   - governance / oversight / documentation rules
+   - sponsor- or investigator-decision conditionals
 
-2. **For each obligation sentence found**, check whether it is covered by an existing KRI's `supporting_quote` (via substring match after normalization).
+   When in doubt, INCLUDE. Over-capture is correct here — the user filters later, and a missed sentence becomes an undetectable coverage gap. The marker-based pre-filter used by earlier versions is **removed** (explicit, user-approved change): it caused real in-scope rules — e.g. the permitted-therapy stability conditions in a Concomitant Therapy section — to never enter the system because they were phrased as permissions rather than "must/shall" obligations. Mechanism: a high-recall LLM pass per mapped section (one call per section), tagging each captured statement with its verbatim text, page, section, `type`, and `severity`.
 
-3. **Uncovered obligation sentences** → automatically promoted to **Tier 3** for processing through the Tier 3 Promotion Pipeline (see above). They enter Step T3-1 (Coverage Filter) immediately.
+2. **If one sentence carries several independent constraints** (e.g. "prohibited prior to AND during the study"), emit one entry per independent constraint.
 
-4. **Artifact**: Save the full inventory — all obligation sentences, their coverage status (covered/uncovered), and the covering KRI ID if applicable — to `{domain}_obligation_inventory.json`.
+3. **Artifact**: Save the full inventory to `{domain}_obligation_inventory.json` with `obligations: [{sentence, page, section, type, severity}]` — the exact schema Step 3A reads.
 
-**Key principle**: This step is a mandatory safety net, not a replacement for the 10-agent extraction. Its purpose is to ensure that every sentence in the protocol that encodes a verifiable obligation has at least one KRI candidate in the system, even if the original agents had low confidence.
+**Scope boundary (deliberate):** Step 2.5 only **builds** the yardstick. It does **not** check coverage, does **not** create KRIs, and does **not** promote anything to Tier 3. Coverage measurement and gap-blocking happen in **Step 3A** (which reads this inventory); recovery of genuinely-missed rules is the job of the **Step 3.5 orphan scan**. The three are complementary, not duplicative: 2.5 = yardstick, 3A = measure + block, 3.5 = find + add.
+
+**Key principle**: a mandatory safety net, not a replacement for the 10-agent extraction. Its purpose is to ensure every conduct-constraining sentence in each domain's sections is enumerated, so Step 3A can prove nothing in-scope was silently dropped.
 
 **Artifact**: `{domain}_obligation_inventory.json`
 
@@ -709,7 +715,7 @@ For each section in `manifest.json` (across all 4 domains in the section map):
 
 **Why section-by-section is primary**: sections have semantic coherence. A rule introduced at the top of a section often has its threshold 3 paragraphs later, and splitting across arbitrary page boundaries loses the connection. Section boundaries preserve meaning. Using the `manifest.json` section map means this sweep uses the existing routing structure rather than imposing a new one.
 
-**Zero-KRI section emphasis (MANDATORY)**: if a section has **zero** existing KRIs citing any of its pages (`len(existing_kris_citing_section) == 0`), the scan treats it as a **zero-KRI section** and dispatches an emphasized prompt variant that instructs the agents to apply maximum recall — since no existing KRI covers the section, every rule-like statement it contains is very likely an orphan. The agents are told not to self-filter, not to assume any statement is "too minor", and to flag every obligation, threshold, prohibition, requirement, procedure, criterion, timing, method, stopping rule, reporting rule, or governance rule present. Empty array is acceptable ONLY if the section genuinely contains no rule-like content (e.g. title page, references, signature block). This emphasis closes the gap where Phase 2 produced no KRIs for a section and the orphan scan was the last safety net. Per-section coverage (existing KRI count, zero-KRI flag, candidates flagged) is recorded in `orphan_scan_report.json` under `primary_sweep.section_coverage_audit` for audit. *Terminology note: "zero-KRI sections" here is distinct from Step 2.5's "uncovered obligations" — that is a per-domain obligation-level audit; this is a cross-domain section-level scan emphasis.*
+**Zero-KRI section emphasis (MANDATORY)**: if a section has **zero** existing KRIs citing any of its pages (`len(existing_kris_citing_section) == 0`), the scan treats it as a **zero-KRI section** and dispatches an emphasized prompt variant that instructs the agents to apply maximum recall — since no existing KRI covers the section, every rule-like statement it contains is very likely an orphan. The agents are told not to self-filter, not to assume any statement is "too minor", and to flag every obligation, threshold, prohibition, requirement, procedure, criterion, timing, method, stopping rule, reporting rule, or governance rule present. Empty array is acceptable ONLY if the section genuinely contains no rule-like content (e.g. title page, references, signature block). This emphasis closes the gap where Phase 2 produced no KRIs for a section and the orphan scan was the last safety net. Per-section coverage (existing KRI count, zero-KRI flag, candidates flagged) is recorded in `orphan_scan_report.json` under `primary_sweep.section_coverage_audit` for audit. *Terminology note: "zero-KRI sections" here is distinct from Step 3A's obligation-level coverage audit (which measures the Step 2.5 inventory against the extracted KRIs) — that is a per-domain sentence-level audit; this is a cross-domain section-level scan emphasis.*
 
 ### Phase 2 — Secondary page sweep (page-by-page, orphan pages only)
 
@@ -990,7 +996,7 @@ Each pipeline run produces these files in the output directory:
 | `raw_SAF.json` | Safety KRIs | Step 2 |
 | `raw_END.json` | Endpoint + governance KRIs | Step 2 |
 | `raw_OPS.json` | Operations KRIs | Step 2 |
-| `{domain}_obligation_inventory.json` | Per-domain section obligation inventory + coverage check | Step 2.5 |
+| `{domain}_obligation_inventory.json` | Per-domain high-recall inventory of every conduct-constraining statement (no marker pre-filter); yardstick for Step 3A coverage | Step 2.5 |
 | `{domain}_autojudgment_report.json` | Per-KRI Step 2.6 layer-by-layer audit | Step 2.6 |
 | `{domain}_manual_review_decisions.json` | Sectioned decision table (per domain) | Step 2.6 |
 | `{domain}_tier3_filtered.json` | Tier 3 promotion pipeline dispositions | Step 2.6 |
@@ -1294,6 +1300,7 @@ This copies all artifacts (extracted_kris.json, Extracted_KRIs.xlsx, raw domain 
 - `scripts/run.py` — single canonical pipeline entry point
 - `scripts/step1a_manifest.py` — Step 1A manifest builder: complete `section_inventory` (every TOC section + disposition, never omitted; best-fit forced for ambiguous sections) + derived `section_map` (ELIG/SAF/END/OPS) with PDF-validated contiguous page ranges
 - `scripts/step2_extract.py` — Step 2 KRI extraction (per-domain, 10-agent multi-model panel) with SOA-exclusion methodology in every prompt
+- `scripts/step2_5_obligation_inventory.py` — Step 2.5 section obligation inventory (per-domain, high-recall, NO obligation-marker pre-filter); builds the `{domain}_obligation_inventory.json` yardstick consumed by Step 3A
 - `scripts/gemini_extract.py` — Gemini API extraction agents (multi-model competition)
 - `scripts/step2_6_autojudgment.py` — Step 2.6 auto-judgment (4-layer engine)
 - `scripts/autojudgment_prompts.py` — neutral CRA-framed judge prompts
