@@ -25,7 +25,7 @@ Usage — legacy registry (the 3 internal test protocols):
 
 Step order (from SKILL.md Phase 1 → Phase 4):
   1a         Manifest (ELIG/SAF/END/OPS sections only — SOA out of scope)
-  2          KRI extraction (per domain, multi-model panel)
+  2          KRI extraction (per domain, 10 Gemini 3.5 Flash agents)
   2.5        Section obligation inventory (per domain, high-recall yardstick)
   2.6        Auto-judgment for T2 + T3-promoted KRIs (6-judge neutral panel)
   3.5        Protocol-wide orphan scan                     [BLOCKING]
@@ -81,10 +81,10 @@ LEGACY_PROTOCOLS = {
 # Canonical order. Each entry: (step_id, description, is_blocking)
 STEP_CATALOG = [
     ("1a",          "Manifest — cover pages + TOC → section map (ELIG/SAF/END/OPS)", False),
-    ("2",           "KRI extraction (per-domain, multi-model panel; ELIG/SAF/END/OPS)", False),
+    ("2",           "KRI extraction (per-domain, 10 Gemini 3.5 Flash agents; ELIG/SAF/END/OPS)", False),
     ("2.5",         "Section obligation inventory (per-domain, high-recall, no marker pre-filter)", False),
     ("2.6",         "Auto-judgment for T2 + T3-promoted KRIs (6-judge panel)",    False),
-    ("3.5",         "Protocol-wide orphan scan (3 Claude + 3 Gemini)",            True),
+    ("3.5",         "Protocol-wide orphan scan (6 Gemini 3.5 Flash, thinking-high)",            True),
     ("3a",          "Completeness gate — section + obligation coverage + H4 SAF heuristic", True),
     ("3b",          "Full KRI accuracy judging (100%, 5-judge panel, 6 checks C1–C6)", True),
     ("3c",          "Consistency check",                                          False),

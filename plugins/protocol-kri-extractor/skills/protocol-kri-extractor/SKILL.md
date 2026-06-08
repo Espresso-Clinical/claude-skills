@@ -872,8 +872,8 @@ Each judge receives, for the KRI being verified:
 
 ```json
 {
-  "judge_id": "C1",
-  "model": "claude-sonnet-4",
+  "judge_id": "G1",
+  "model": "gemini-3.5-flash",
   "kri_id": "SAF-003",
   "verdict": "CORRECT | IMPRECISE | WRONG",
   "failing_checks": ["C2", "C4"],
@@ -958,13 +958,13 @@ These optimizations DO NOT reduce coverage. Coverage remains 100%. They only red
       "final_verdict": "PASS",
       "consensus": "4/5 CORRECT",
       "judge_verdicts": [
-        {"judge_id": "C1", "verdict": "CORRECT", ...},
-        {"judge_id": "C2", "verdict": "CORRECT", ...},
-        {"judge_id": "C3", "verdict": "CORRECT", ...},
-        {"judge_id": "G1", "verdict": "IMPRECISE", "failing_checks": ["C4"], "issue": "missing 'supine' qualifier", ...},
-        {"judge_id": "G2", "verdict": "CORRECT", ...}
+        {"judge_id": "G1", "verdict": "CORRECT", ...},
+        {"judge_id": "G2", "verdict": "CORRECT", ...},
+        {"judge_id": "G3", "verdict": "CORRECT", ...},
+        {"judge_id": "G4", "verdict": "IMPRECISE", "failing_checks": ["C4"], "issue": "missing 'supine' qualifier", ...},
+        {"judge_id": "G5", "verdict": "CORRECT", ...}
       ],
-      "dissent": {"judge_id": "G1", "issue": "missing 'supine' qualifier"},
+      "dissent": {"judge_id": "G4", "issue": "missing 'supine' qualifier"},
       "correction_applied": null,
       "user_decision": null
     }
@@ -1109,7 +1109,7 @@ Every multi-agent panel in this skill runs on a **single model — Gemini 3.5 Fl
 
 **How to run Gemini agents (multi-turn with native PDF ingestion — PREFERRED for Phase 2):**
 
-Gemini agents use **multi-turn focused sub-area extraction with native PDF ingestion**. It was validated to achieve high KRI yield on all 4 domains: ELIG 46 (vs Claude 43), SAF 37 (vs 32), END 42 (vs 40), OPS 75 (vs 70).
+Gemini agents use **multi-turn focused sub-area extraction with native PDF ingestion**. It was validated to achieve high KRI yield on all 4 domains: ELIG 46, SAF 37, END 42, OPS 75.
 
 Each Gemini agent opens a chat session with the PDF uploaded, then runs domain-specific sub-area turns sequentially (e.g., for OPS: IP handling → Blinding → Randomization → Procedures → Docs → Appendices). The focused turns force exhaustive extraction within each sub-area rather than a single broad pass where the model self-limits.
 

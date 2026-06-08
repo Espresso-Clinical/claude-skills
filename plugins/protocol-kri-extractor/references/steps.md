@@ -754,8 +754,8 @@ Return JSON:
 **Per-judge verdict JSON**:
 ```json
 {
-  "judge_id": "C1",
-  "model": "claude-sonnet-4",
+  "judge_id": "G1",
+  "model": "gemini-3.5-flash",
   "kri_id": "SAF-003",
   "verdict": "CORRECT | IMPRECISE | WRONG",
   "failing_checks": ["C2", "C4"],

@@ -1,6 +1,7 @@
 """
-Gemini-based KRI extraction — runs as competing agent alongside Claude agents.
-Calls Gemini API directly (no MCP needed). API key loaded from ~/.claude/secrets/.
+Gemini-based KRI extraction — the single-model panel engine (Gemini 3.5 Flash,
+thinking-high; Item 1). Calls Gemini API directly (no MCP needed). API key loaded
+from ~/.claude/secrets/.
 
 Usage (called by the skill, not directly):
   from gemini_extract import run_gemini_extraction
@@ -19,7 +20,7 @@ def load_gemini_key() -> str:
     if not os.path.exists(SECRETS_PATH):
         raise FileNotFoundError(
             f"Secrets file not found: {SECRETS_PATH}\n"
-            f"Create it with: {{'gemini': {{'api_key': 'YOUR_KEY', 'model': 'gemini-2.5-pro-preview-05-06'}}}}"
+            f"Create it with: {{'gemini': {{'api_key': 'YOUR_KEY', 'model': 'gemini-3.5-flash'}}}}"
         )
     with open(SECRETS_PATH) as f:
         secrets = json.load(f)
@@ -45,7 +46,7 @@ def load_gemini_model(task: str = "extract") -> str:
     gemini = secrets.get("gemini", {})
     # Try task-specific first, fall back to generic "model"
     task_key = f"model_{task}"
-    return gemini.get(task_key) or gemini.get("model", "gemini-2.5-pro")
+    return gemini.get(task_key) or gemini.get("model", "gemini-3.5-flash")
 
 
 # ── Gemini API wrapper ───────────────────────────────────────────────────────
@@ -209,7 +210,7 @@ def run_gemini_extraction(
     Returns list of (agent_idx, kris_list) tuples.
 
     Each agent gets the same prompt but different temperature → different extraction.
-    This creates genuine diversity for adjudication against Claude agents.
+    This creates genuine diversity across the Gemini agents for adjudication.
     """
     if len(temperature_spread) < n_agents:
         temperature_spread = tuple(
@@ -258,13 +259,12 @@ def save_gemini_results(results: list, out_dir: str, domain: str):
 #
 # Background: The original run_gemini_extraction() passes the entire domain
 # prompt (pre-extracted text) in a single API call. On large domains (SAF 33KB,
-# END 36KB, OPS 75KB), Gemini self-limits its output and produces far fewer
-# KRIs than Claude agents (which iterate via the Agent tool). Validation on
-# APT.DFI.001 showed the gap: ELIG 14 vs 43, SAF 14 vs 32, END 16 vs 40,
-# OPS 13 vs 70 (Gemini vs Claude per agent).
+# END 36KB, OPS 75KB), the model self-limits its output and produces far fewer
+# KRIs (validation on APT.DFI.001, single-shot method: ELIG 14, SAF 14,
+# END 16, OPS 13 per agent).
 #
-# The multi-turn approach matches Claude parity (ELIG 46, SAF 37, END 42,
-# OPS 75) by giving each Gemini agent two capabilities Claude agents have:
+# The multi-turn approach yields far more (ELIG 46, SAF 37, END 42,
+# OPS 75) by giving each Gemini agent two capabilities:
 #   1. Native PDF ingestion — upload the PDF file and let Gemini read it
 #      directly (sees actual tables, footnotes, layout — not pdfplumber text)
 #   2. Focused sub-area turns — guide the model through each sub-section of
@@ -272,10 +272,10 @@ def save_gemini_results(results: list, out_dir: str, domain: str):
 #      so it extracts exhaustively instead of making one broad pass and stopping
 #
 # Used ONLY for Phase 2 domain extraction of ELIG/SAF/END/OPS. SOA is
-# OUT OF SCOPE for this skill (handled by `soa-kri-extractor`). Claude agents
-# are unchanged. Every turn prompt below is appended with the SOA exclusion
-# methodology block via `_apply_soa_guardrail()` so the agent skips any
-# SOA-flavored content it encounters in its assigned section.
+# OUT OF SCOPE for this skill (handled by `soa-kri-extractor`). Every turn
+# prompt below is appended with the SOA exclusion methodology block via
+# `_apply_soa_guardrail()` so the agent skips any SOA-flavored content it
+# encounters in its assigned section.
 
 # Per-domain sub-area turn templates. Each tuple is (turn_name, turn_prompt).
 SUB_AREA_TURNS = {

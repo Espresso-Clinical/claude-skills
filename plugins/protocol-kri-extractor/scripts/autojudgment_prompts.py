@@ -51,7 +51,7 @@ Return valid JSON with no markdown fences, no prose, no extra text.
 """
 
 
-# ─── Neutral judge prompt — same for all 6 judges (3 Claude + 3 Gemini) ──────
+# ─── Neutral judge prompt — same for all 6 judges (6 Gemini 3.5 Flash) ───────
 JUDGE_PROMPT = """You are a clinical research associate (CRA) and protocol expert judging whether a candidate KRI (Key Risk Indicator) should be included in the Golden Set for a clinical trial protocol.
 
 You receive ONE candidate KRI at a time, along with the extraction-panel vote count and per-layer auto-judgment results. Based on:

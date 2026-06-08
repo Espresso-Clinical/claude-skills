@@ -23,7 +23,7 @@ Four layers per candidate:
   Layer 1.5 — Atomicity check (deterministic: precondition-based refinement
               from SKILL.md "Atomization of compound clauses")
   Layer 2   — Coverage/dedup check (deterministic: already covered by T1?)
-  Layer 3   — 6-judge neutral panel (3 Claude + 3 Gemini, same CRA-framed
+  Layer 3   — 6-judge neutral panel (6 Gemini 3.5 Flash, thinking-high; same CRA-framed
               prompt, consistent with the 10-agent extraction panel's framing)
   Layer 4   — Aggregate decision (auto_approve / auto_reject / flag)
 
