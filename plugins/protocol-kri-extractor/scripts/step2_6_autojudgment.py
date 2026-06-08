@@ -99,11 +99,11 @@ def layer1_verification_gate(kri, pdf_page_cache):
     if len(rule) < 8:
         return {"pass": False, "reason": "rule_for_llm empty or trivial"}
 
-    rule_lower = rule.lower()
-    binary_markers = ["verify", "confirm", "check", "ensure", "record", "document",
-                      "must", "shall", "≥", "≤", ">", "<", "="]
-    if not any(m in rule_lower for m in binary_markers):
-        return {"pass": False, "reason": "rule_for_llm not binary/verifiable"}
+    # NOTE (Fix #5): no "binary/verifiable" reject here. Per Quality Rule 15 this
+    # skill does NOT filter non-binary / definitional / conditional / investigator-
+    # or-sponsor-decision rules — that filtering happens downstream (the distiller /
+    # the user). Only genuine quality failures (empty rule, fabricated quote, bad
+    # reference) reject at this gate.
 
     if len(quote) < 5:
         return {"pass": False, "reason": "supporting_quote empty or trivial"}
@@ -142,19 +142,24 @@ def layer1_5_atomicity(kri):
     rule = (kri.get("rule_for_llm") or "").strip().lower()
     name = (kri.get("kri_name") or "").strip().lower()
 
-    # Always-true sex/gender clauses
+    # Always-true sex/gender tautology — the one genuinely-empty case we still
+    # reject (SKILL.md atomicity example "Males or females"). Tightened (Fix #5):
+    # only fires when the rule is ESSENTIALLY ONLY the sex clause (short, no age or
+    # other clinical content), so a real criterion that merely mentions sex is
+    # never dropped.
     sex_patterns = [
         r"\b(male|females?)\s+or\s+(males?|female)\b",
-        r"\bsex\s+(is\s+)?(male|female)\b",
         r"\bsubject is male or female\b",
     ]
-    for p in sex_patterns:
-        if re.search(p, rule) and "age" not in rule:
-            return {"pass": False, "reason": "always-true clause — sex/gender is universal, not a verifiable check"}
+    if len(rule) < 60 and "age" not in rule:
+        for p in sex_patterns:
+            if re.search(p, rule):
+                return {"pass": False, "reason": "always-true clause — sex/gender is universal, not a verifiable check"}
 
-    # Pure "is defined as X or Y" without a testable action — obvious non-binary
-    if re.search(r"\bis defined as\b", rule) and len(rule) < 40:
-        return {"pass": False, "reason": "rule is a pure definition with no verifiable action"}
+    # NOTE (Fix #5): the "pure definition" auto-reject is REMOVED. Per Quality
+    # Rule 14, definitional rules ("X is defined as ...", "X does not include ...")
+    # ARE valid KRIs — a site can deviate by applying the wrong definition. They
+    # are kept here; the user / downstream distiller decides whether to drop them.
 
     # Subjective qualifiers with no measurable threshold — pass through; this
     # skill does not classify non-binary KRIs (filtering happens downstream).
