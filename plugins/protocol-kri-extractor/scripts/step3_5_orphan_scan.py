@@ -11,7 +11,7 @@ with reason `out_of_scope_soa` — they belong to the separate `soa-kri-extracto
 skill and are never promoted to a KRI here.
 
 Architecture:
-  6-agent cross-model panel (3 Claude Sonnet 4 + 3 Gemini 2.5 Pro)
+  6-agent panel (6 Gemini 3.5 Flash, thinking-high) — single-model, temp-spread
   Phase 1 — Primary section sweep (section-by-section using manifest.json)
   Phase 2 — Secondary page sweep (pages NOT claimed by any section)
   Phase 3 — Candidate consolidation (high-recall; tier by agent count)
@@ -48,9 +48,11 @@ from gemini_extract import call_gemini  # noqa: E402
 
 # ─── Constants ──────────────────────────────────────────────────────────────
 CLAUDE_MODEL = "claude-sonnet-4-20250514"
-N_CLAUDE_AGENTS = 3
-N_GEMINI_AGENTS = 3
-N_PANEL = N_CLAUDE_AGENTS + N_GEMINI_AGENTS  # 6
+# Item 1: the scan panel is all Gemini 3.5 Flash (thinking-high). Claude count
+# kept at 0 only so any external importer of the name doesn't break.
+N_CLAUDE_AGENTS = 0
+N_GEMINI_AGENTS = 6
+N_PANEL = N_GEMINI_AGENTS  # 6
 DOMAINS = ["ELIG", "SAF", "END", "OPS"]
 # SOA is OUT OF SCOPE for this skill — handled by `soa-kri-extractor`. Any
 # SOA-flavored candidate that an agent flags is dropped during candidate
@@ -246,56 +248,38 @@ def _parse_array_response(raw):
 
 
 # ─── Scanner agents ─────────────────────────────────────────────────────────
-def run_claude_scanner(agent_id, section_text, existing_kris, client):
-    prompt = build_scan_prompt(section_text, existing_kris)
-    try:
-        response = client.messages.create(
-            model=CLAUDE_MODEL,
-            max_tokens=4000,
-            system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        candidates = _parse_array_response(response.content[0].text)
-        for c in candidates:
-            c["agent_id"] = agent_id
-            c["model"] = "claude-sonnet-4"
-        return candidates
-    except Exception as e:
-        return [{"agent_id": agent_id, "model": "claude-sonnet-4", "error": str(e)}]
+# Temperature spread gives independence among the same-model (Gemini) scanners.
+_SCAN_TEMPS = [0.1, 0.15, 0.2, 0.25, 0.3, 0.35]
 
 
-def run_gemini_scanner(agent_id, section_text, existing_kris):
+def run_gemini_scanner(agent_id, section_text, existing_kris, temperature=0.2):
     prompt = build_scan_prompt(section_text, existing_kris)
     try:
-        response_text = call_gemini(prompt, system_prompt=SYSTEM_PROMPT, temperature=0.2)
+        response_text = call_gemini(prompt, system_prompt=SYSTEM_PROMPT,
+                                    temperature=temperature, task="judge")
         candidates = _parse_array_response(response_text)
         for c in candidates:
             c["agent_id"] = agent_id
-            c["model"] = "gemini-2.5-pro"
+            c["model"] = "gemini-3.5-flash"
         return candidates
     except Exception as e:
-        return [{"agent_id": agent_id, "model": "gemini-2.5-pro", "error": str(e)}]
+        return [{"agent_id": agent_id, "model": "gemini-3.5-flash", "error": str(e)}]
 
 
-def run_scan_panel(section_text, existing_kris, client):
-    """Run the full 6-agent panel on a section in parallel. Returns combined candidates."""
+def run_scan_panel(section_text, existing_kris):
+    """Run the full N_PANEL-agent panel on a section in parallel. Single-model
+    panel (Item 1) — N_PANEL Gemini 3.5 Flash scanners (thinking-high), with a
+    temperature spread for independence. Returns combined candidates."""
+    temps = (_SCAN_TEMPS * ((N_PANEL // len(_SCAN_TEMPS)) + 1))[:N_PANEL]
     all_candidates = []
-
     with ThreadPoolExecutor(max_workers=N_PANEL) as ex:
-        futures = []
-        for i in range(N_CLAUDE_AGENTS):
-            futures.append(
-                ex.submit(run_claude_scanner, f"C{i + 1}", section_text, existing_kris, client)
-            )
-        for i in range(N_GEMINI_AGENTS):
-            futures.append(
-                ex.submit(run_gemini_scanner, f"G{i + 1}", section_text, existing_kris)
-            )
-
+        futures = [
+            ex.submit(run_gemini_scanner, f"G{i + 1}", section_text, existing_kris, temps[i])
+            for i in range(N_PANEL)
+        ]
         for f in as_completed(futures):
             candidates = f.result()
             all_candidates.extend([c for c in candidates if "error" not in c])
-
     return all_candidates
 
 
@@ -510,7 +494,7 @@ def run_orphan_scan(output_dir, pdf_path):
 
     print("Step 3.5 — Protocol-Wide Orphan Scan (BLOCKING)")
     print(f"  Existing KRIs loaded: {len(all_kris)}")
-    print(f"  Panel: {N_CLAUDE_AGENTS} Claude + {N_GEMINI_AGENTS} Gemini")
+    print(f"  Panel: {N_PANEL} Gemini 3.5 Flash (thinking-high)")
     print()
 
     t0 = time.time()
@@ -552,7 +536,7 @@ def run_orphan_scan(output_dir, pdf_path):
                 flush=True,
             )
 
-            candidates = run_scan_panel(section_text, existing, client)
+            candidates = run_scan_panel(section_text, existing)
             for c in candidates:
                 c["_source"] = "primary_section_sweep"
                 c["_section"] = section_number
@@ -586,7 +570,7 @@ def run_orphan_scan(output_dir, pdf_path):
         if not page_text.strip():
             continue
         existing = get_kris_citing_pages(all_kris, {pg})
-        candidates = run_scan_panel(page_text, existing, client)
+        candidates = run_scan_panel(page_text, existing)
         for c in candidates:
             c["_source"] = "secondary_page_sweep"
             c["_page"] = pg
@@ -681,7 +665,7 @@ def run_orphan_scan(output_dir, pdf_path):
         "_meta": {
             "step": "3.5",
             "total_agents": N_PANEL,
-            "agent_breakdown": {"claude": N_CLAUDE_AGENTS, "gemini": N_GEMINI_AGENTS},
+            "agent_breakdown": {"gemini_scan_panel": N_PANEL, "claude_adjudication_calls": "consolidate + cross_check (single calls, not a panel)"},
             "sections_scanned": sum(
                 len(s) if isinstance(s, list) else 0 for s in section_map.values()
             ),
