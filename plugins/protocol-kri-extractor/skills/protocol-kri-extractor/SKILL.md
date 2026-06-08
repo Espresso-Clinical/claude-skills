@@ -102,22 +102,21 @@ The monitor maintains and checks this artifact checklist throughout execution:
 |------|---------------------|-----------|
 | 1A | `manifest.json` — must contain a COMPLETE `section_inventory` (every TOC section with a disposition: ELIG/SAF/END/OPS, `out_of_scope_soa`, or `non_substantive` — never omitted) plus the derived `section_map` (ELIG/SAF/END/OPS only). No in-scope section may be missing from the inventory. | |
 | 2 (per domain) | `raw_{DOMAIN}.json` for each of ELIG/SAF/END/OPS, `{DOMAIN}_adjudication.json` | |
-| 2 (multi-model) | 5 Claude agent outputs + 5 Gemini agent outputs per domain | |
+| 2 (extraction panel) | 10 Gemini 3.5 Flash agent outputs per domain (thinking-high) | |
 | 2 (consensus) | Tier 1 auto-approved, Tier 2 decision table shown to user, Tier 3 → promotion pipeline (`{domain}_tier3_filtered.json`) | |
 | 2 (per-domain checkpoint) | `{domain}_manual_review_decisions.json` — user acceptance/rejection record for all T2 + promoted T3 KRIs | |
 | 2.5 (obligation inventory) | `{domain}_obligation_inventory.json` — high-recall inventory of every conduct-constraining statement (NO obligation-marker pre-filter); the yardstick Step 3A measures coverage against | |
 | **3.5** | **`orphan_scan_report.json` (primary section sweep + secondary page sweep + consolidation + cross-check + classification + user decisions + promoted orphans appended to `raw_{DOMAIN}.json`). SOA-flavored candidates dropped with reason `out_of_scope_soa`.** | |
 | 3A | `gaps_report.json` — BLOCKING gate: section coverage (every in-scope section cited by ≥1 KRI) + obligation coverage (LLM-judged, every Step 2.5 inventory statement covered) + H4 SAF heuristic; `pass_gate: true` with 0 unresolved gaps required | |
-| **3B** | **`accuracy_report_full.json` (100% KRI coverage, 5-judge cross-model panel, 0 FAIL, 0 unresolved FLAG — blocking)** | |
+| **3B** | **`accuracy_report_full.json` (100% KRI coverage, 5-judge Gemini 3.5 Flash panel, 0 FAIL, 0 unresolved FLAG — blocking)** | |
 | 3C | `consistency_report.json` | |
 | 3D | `verify_report.json` — must show 100% pass | |
 | 4A | `extracted_kris.json`, `Extracted_KRIs.xlsx` (4 domain sheets: ELIG, SAF, END, OPS + Summary) | |
 | 4A-Dedup | `dedup_report.json` (contains `cross_domain` — including any SOA-flavored deletions, `intra_domain`, and `kept_despite_similarity` sections) | |
 
-**3. Multi-Model Extraction Enforcement**
+**3. Gemini Panel Extraction Enforcement**
 For Step 2, the monitor MUST verify:
-- Exactly 5 Claude sub-agents were launched per domain
-- Exactly 5 Gemini agents were launched per domain (via `gemini_extract.py`)
+- Exactly 10 Gemini 3.5 Flash sub-agents (thinking-high) were launched per domain (via `gemini_extract.py`)
 - All 10 agent outputs were collected and merged
 - Consensus tiers were correctly applied:
   - 7-10 agents (T1) → auto-approved (verify these went into the domain's KRI set)
@@ -251,7 +250,7 @@ A single protocol criterion may contain multiple sub-conditions without explicit
 
 **Verifiability test (final check when ambiguous):** for each proposed sub-KRI ask (a) Is there real subject data that would make this sub-KRI fail? (b) Does this sub-KRI read a different data field/record than the other sub-KRIs? Both must be YES to justify splitting. When in doubt, keep combined — over-splitting creates noise in consensus tiers that obscures real disagreement.
 
-**Important — consistency across all agents and domains:** this rule applies identically to Claude sub-agents and Gemini agents, and across ELIG / SAF / END / OPS. The goal is consistent atomic granularity regardless of which agent produced the KRI.
+**Important — consistency across all agents and domains:** this rule applies identically to all Gemini 3.5 Flash sub-agents, and across ELIG / SAF / END / OPS. The goal is consistent atomic granularity regardless of which agent produced the KRI.
 
 Four in-scope categories (drawn from ICH GCP):
 - **ELIG** — Eligibility (inclusion + exclusion)
@@ -504,11 +503,11 @@ Read `references/steps.md` for the detailed prompt templates and logic for each 
 
 **Step 1A — Manifest**: Read cover pages + TOC. Produce a **complete `section_inventory`** — EVERY section/sub-section/appendix in the TOC listed exactly once, each with a **disposition**: one of the 4 in-scope domains (ELIG, SAF, END, OPS), `out_of_scope_soa`, or `non_substantive`. **A section is NEVER silently omitted** — a section with no obvious domain is forced into its single best-fit in-scope domain (with `confidence: "low"` and a note), never dropped. `non_substantive` is reserved for genuinely rule-free sections (title page, TOC, abbreviations, references, signature page); conduct-governing sections (concomitant/prohibited medications, dose modification, discontinuation/withdrawal, informed consent, deviation handling, blinding) are ALWAYS in-scope. Schedule-of-Activities sections are tagged `out_of_scope_soa` (handled by the separate `soa-kri-extractor` skill) — listed in the inventory but not mapped to a domain. Each section's page range is then **validated against the actual PDF** (heading detected in the body; ranges made contiguous) so a short TOC estimate cannot cause pages to be skipped. The per-domain `section_map` is **derived deterministically** from the inventory (in-scope dispositions only) and remains the source of truth for which pages each downstream extractor and the orphan scan read.
 
-### Phase 2 — Extract (4-domain multi-model panel)
+### Phase 2 — Extract (4-domain single-model Gemini panel)
 
 > **Scope reminder — SOA is out of scope for this skill.** Schedule-of-Activities content (the SoA table, its footnotes, "procedure × visit" rules, visit-window check-ins, cross-visit timing rules, visit-schedule narrative) is handled by the separate `soa-kri-extractor` skill. Every extractor prompt in this Phase 2 carries the explicit "Out of scope — SOA" methodology block defined in `references/steps.md`. If an agent encounters SOA-flavored content in its domain section, it must skip it — do not emit a KRI for it.
 
-Extraction for the 4 in-scope domains (ELIG, SAF, END, OPS) uses a **10-agent multi-model panel** (5 Claude Sonnet + 5 Gemini 2.5 Pro agents running in parallel). Consensus determines tier: **Tier 1** = 7–10 agents agree (auto-approved into Golden Set), **Tier 2** = 4–6 agents agree (**Step 2.6 auto-judgment** produces the per-KRI pre-decision), **Tier 3** = 1–3 agents (enters Tier 3 promotion pipeline, terminating in Step 2.6 auto-judgment). Step 2.6 replaces the prior manual decision-table pause with an automated 4-layer engine (verification gate, atomicity check, dedup/coverage, 6-judge neutral panel, aggregate). With `--auto-approve-unanimous` ON (default), the pipeline runs end-to-end without blocking; flagged items default to rejected and surface at end-of-run in **Step 4A-FlaggedReview** for cross-domain user review and optional re-inclusion. Per-domain content rules:
+Extraction for the 4 in-scope domains (ELIG, SAF, END, OPS) uses a **10-agent single-model panel** (10 Gemini 3.5 Flash agents, thinking-high, running in parallel with a temperature spread for independence). Consensus determines tier: **Tier 1** = 7–10 agents agree (auto-approved into Golden Set), **Tier 2** = 4–6 agents agree (**Step 2.6 auto-judgment** produces the per-KRI pre-decision), **Tier 3** = 1–3 agents (enters Tier 3 promotion pipeline, terminating in Step 2.6 auto-judgment). Step 2.6 replaces the prior manual decision-table pause with an automated 4-layer engine (verification gate, atomicity check, dedup/coverage, 6-judge neutral panel, aggregate). With `--auto-approve-unanimous` ON (default), the pipeline runs end-to-end without blocking; flagged items default to rejected and surface at end-of-run in **Step 4A-FlaggedReview** for cross-domain user review and optional re-inclusion. Per-domain content rules:
 - ELIG: one KRI per criterion/sub-criterion. Extract every criterion regardless of whether the wording is qualitative or quantitative — write `rule_for_llm` as faithfully as the protocol allows, but do not skip a criterion because it uses qualitative wording.
 - SAF: every reporting timeline, stopping rule, emergency protocol
 - END: **two sub-categories** — (1) one KRI per endpoint definition (primary, each key secondary, each other secondary individually, each biomarker analyte × measurement type, each HCRU metric), (2) one KRI per governance rule (analysis populations, interim analysis triggers, alpha spending, study end definition, data locks)
@@ -549,13 +548,13 @@ After completing the 10-agent extraction for a domain (and before Step 2.6), bui
 
 ### Phase 3 — Validate (orphan scan + completeness + H4 heuristic + full accuracy judging + consistency + mandatory full verbatim verification)
 
-**Step 3.5 — Protocol-Wide Orphan Scan (MANDATORY BLOCKING GATE, runs FIRST in Phase 3)**: Scan the ENTIRE protocol — section-by-section (primary) and page-by-page for any page not claimed by the section map (secondary sweep) — to find rule-like statements, obligations, thresholds, prohibitions, requirements, criteria, timings, or methods that were NOT captured by any domain extractor in Phase 2. Uses a **6-agent panel (3 Claude + 3 Gemini)** with high-recall candidate detection and consensus-based promotion. Promoted orphan KRIs are appended to the corresponding `raw_{DOMAIN}.json` file (one of the 4 in-scope domains: ELIG/SAF/END/OPS) so they flow through the rest of Phase 3 validation like any other KRI. **SOA-flavored candidates** (procedure-at-visit, visit-window, cross-visit-timing, SoA table content, SoA footnotes) **are dropped during candidate consolidation** with reason `"out_of_scope_soa"` — logged in the report for audit, but never promoted to a KRI in this skill. **The pipeline cannot advance to Step 3A until the orphan scan is complete and all user decisions are made.** See full spec below.
+**Step 3.5 — Protocol-Wide Orphan Scan (MANDATORY BLOCKING GATE, runs FIRST in Phase 3)**: Scan the ENTIRE protocol — section-by-section (primary) and page-by-page for any page not claimed by the section map (secondary sweep) — to find rule-like statements, obligations, thresholds, prohibitions, requirements, criteria, timings, or methods that were NOT captured by any domain extractor in Phase 2. Uses a **6-agent panel (6 Gemini 3.5 Flash, thinking-high)** with high-recall candidate detection and consensus-based promotion. Promoted orphan KRIs are appended to the corresponding `raw_{DOMAIN}.json` file (one of the 4 in-scope domains: ELIG/SAF/END/OPS) so they flow through the rest of Phase 3 validation like any other KRI. **SOA-flavored candidates** (procedure-at-visit, visit-window, cross-visit-timing, SoA table content, SoA footnotes) **are dropped during candidate consolidation** with reason `"out_of_scope_soa"` — logged in the report for audit, but never promoted to a KRI in this skill. **The pipeline cannot advance to Step 3A until the orphan scan is complete and all user decisions are made.** See full spec below.
 
 **Step 3A — Completeness Gate (MANDATORY BLOCKING GATE)**: Two complementary coverage checks, both blocking. **(1) Section coverage** — every in-scope section in `manifest.section_inventory` (disposition ELIG/SAF/END/OPS) must have at least one KRI citing one of its pages; `out_of_scope_soa` / `non_substantive` sections are exempt. A still-empty in-scope section (after the Step 3.5 orphan scan has already run) is a gap. **(2) Obligation coverage** — every conduct-constraining statement in each domain's `{domain}_obligation_inventory.json` (from Step 2.5) must be covered by ≥1 KRI. Coverage is decided by an **LLM coverage judge** (semantic — "would a KRI catch a violation of this obligation?"), NOT crude substring matching, because the high-recall inventory sentences are longer than the ≤30-word quotes. **Partial coverage of a compound obligation (e.g. the "prior to" half but not the "during the study" half) counts as NOT covered.** The prior vacuous behaviour (empty/missing inventory → 100%) is removed: a domain with mapped sections but a missing inventory is a **blocking error** (Step 2.5 was not run). **The pipeline cannot advance to Step 3B until Step 3A reports 0 unresolved section gaps and 0 unresolved obligation gaps.** A gap clears by (a) covering it with a KRI, (b) re-tagging the section `non_substantive` in the manifest, or (c) acknowledging it with a reason in `gaps_resolutions.json` (`{"sections": {"<num>": {"acknowledged": true, "reason": "…"}}, "obligations": {"<gap_key>": {"acknowledged": true, "reason": "…"}}}`). SOA-flavored obligations are out of scope and not checked. Output: `gaps_report.json`.
 
 **Step 3A+ — H4 SAF Heuristic — Adverse-Event Collection Window**: Single protocol-agnostic heuristic retained from the prior 10-heuristic set. Verifies that there is a SAF KRI defining the AE collection window starting at first IP dose (e.g., "AEs collected from first IP administration through 30 days post-last-dose"). If no such KRI exists in `raw_SAF.json`, promote a candidate via the orphan-scan pathway. This is the only retained heuristic — the prior H1, H2, H3, H5, H6, H7, H8, H9, H10 were SOA-flavored (visit × procedure relationships, SoA-table geometry) and were removed when SOA extraction moved to `soa-kri-extractor`. Implementation: inside `step3a_completeness.py`.
 
-**Step 3B — Full KRI Accuracy Judging (MANDATORY BLOCKING GATE, 100% coverage, multi-judge panel)**: Every single KRI (100% of the extracted set across all in-scope domains, including orphan KRIs promoted in Step 3.5) is verified by a **5-judge cross-model panel**: 3 Claude Sonnet judges + 2 Gemini 2.5 Pro judges. Each judge independently verifies six checks — Faithfulness (C1), Specific Values (C2), Reference Accuracy (C3), Completeness (C4), Scope Accuracy (C5), and Atomicity (C6) — against the full text of the cited page(s) ±1 page of context. Consensus adjudication determines the final verdict; any FAIL is blocking; FLAGs escalate to user decision; IMPRECISE KRIs are auto-corrected only when ≥3 judges agree on the correction, then re-verified. **The pipeline cannot advance to Step 3C until Step 3B emits a pass report with 0 FAIL and 0 unresolved FLAG.** This step checks whether the **content** of rules is clinically accurate — it does NOT substitute for Step 3D quote verification. **This step replaces the prior 20-KRI sampling approach** — sampling is no longer permitted under any circumstances. See full spec below.
+**Step 3B — Full KRI Accuracy Judging (MANDATORY BLOCKING GATE, 100% coverage, multi-judge panel)**: Every single KRI (100% of the extracted set across all in-scope domains, including orphan KRIs promoted in Step 3.5) is verified by a **5-judge Gemini 3.5 Flash panel**: 5 Gemini 3.5 Flash judges (thinking-high), temperature-spread for independence. Each judge independently verifies six checks — Faithfulness (C1), Specific Values (C2), Reference Accuracy (C3), Completeness (C4), Scope Accuracy (C5), and Atomicity (C6) — against the full text of the cited page(s) ±1 page of context. Consensus adjudication determines the final verdict; any FAIL is blocking; FLAGs escalate to user decision; IMPRECISE KRIs are auto-corrected only when ≥3 judges agree on the correction, then re-verified. **The pipeline cannot advance to Step 3C until Step 3B emits a pass report with 0 FAIL and 0 unresolved FLAG.** This step checks whether the **content** of rules is clinically accurate — it does NOT substitute for Step 3D quote verification. **This step replaces the prior 20-KRI sampling approach** — sampling is no longer permitted under any circumstances. See full spec below.
 
 **Step 3C — Consistency**: Same clinical concept across multiple KRIs (e.g., a threshold value mentioned in both SAF and OPS) must have consistent values, units, and references. Output: `consistency_report.json`.
 
@@ -700,14 +699,14 @@ This step is the **protocol-wide orphan scan**. It also re-applies the SOA-exclu
 - `manifest.json` (section map)
 - All `raw_{DOMAIN}.json` files (ELIG, SAF, END, OPS)
 
-### Architecture — 6-agent panel (3 Claude + 3 Gemini)
+### Architecture — 6-agent panel (6 Gemini 3.5 Flash, thinking-high)
 
 Cross-model, same principle as Phase 2 extraction:
 
 | Agents | Model |
 |---|---|
-| A_C1, A_C2, A_C3 | Claude Sonnet 4 |
-| A_G1, A_G2, A_G3 | Gemini 2.5 Pro |
+| A_G1, A_G2, A_G3 | Gemini 3.5 Flash (thinking-high) |
+| A_G4, A_G5, A_G6 | Gemini 3.5 Flash (thinking-high) |
 
 Orphan scanning is a **recall problem** — the cost of missing an orphan is higher than the cost of flagging a non-orphan. Therefore the candidate-detection stage is high-recall (any agent flagging something makes it a candidate), and the promotion stage is consensus-based.
 
@@ -843,14 +842,13 @@ Step 3B also closes the "wrong page citation" loophole: Step 3D's substring chec
 
 **Replaces** the prior 20-KRI / 4-per-category sampling approach. The old sampling implementation is superseded because it failed to provide coverage guarantees. Sampling must never be re-introduced under any framing.
 
-### Panel composition — 5 judges per KRI, cross-model
+### Panel composition — 5 judges per KRI (Gemini 3.5 Flash, thinking-high)
 
 | Judges | Model |
 |---|---|
-| C1, C2, C3 | Claude Sonnet 4 (3 independent judges) |
-| G1, G2 | Gemini 2.5 Pro (2 independent judges) |
+| G1, G2, G3, G4, G5 | Gemini 3.5 Flash, thinking-high (5 independent judges) |
 
-The 3-Claude / 2-Gemini ratio (vs. 5+5 in Phase 2 extraction) is intentional. Judging is a simpler task than extraction — it is fully grounded with the exact page text — so fewer agents per model suffice, and it keeps 100% coverage cost-tractable. Cross-model is non-negotiable to prevent same-model confirmation bias.
+All 5 judges are Gemini 3.5 Flash at high thinking, run with a temperature spread (≈0.1–0.3) so the single-model panel still has independent voices. Judging is a simpler task than extraction — it is fully grounded with the exact page text — so 5 judges suffice and keep 100% coverage cost-tractable. (Item 1: single-model panel; the prior cross-model Claude + Gemini mix was replaced. Trade-off: cross-model diversity is lost — an intentional decision.)
 
 ### Per-KRI input to each judge
 
@@ -985,7 +983,7 @@ Step 3B and Step 3D are complementary, NOT overlapping. Both run, both are block
 |---|---|---|
 | **What it checks** | Clinical content: does the rule mean what the protocol says? | Traceability: is the quote a verbatim substring of the cited page? |
 | **Coverage** | 100% | 100% |
-| **Method** | 5-judge cross-model panel, semantic check of 6 dimensions (C1–C6) | Deterministic pdfplumber substring match |
+| **Method** | 5-judge Gemini 3.5 Flash panel, semantic check of 6 dimensions (C1–C6) | Deterministic pdfplumber substring match |
 | **Catches** | Wrong thresholds, wrong visit scope, wrong page topic, missing details, misinterpretation, compound (non-atomic) KRIs, footnote-number/quote misalignment | Fabricated quotes, wrong page numbers, typos that break exact match |
 | **Blocking gate** | Yes — before 3C | Yes — before 4A |
 
@@ -1010,7 +1008,7 @@ Each pipeline run produces these files in the output directory:
 | `{domain}_tier3_filtered.json` | Tier 3 promotion pipeline dispositions | Step 2.6 |
 | `orphan_scan_report.json` | **Protocol-wide orphan scan results (primary section sweep + secondary page sweep + consolidation + cross-check + classification + user decisions + promoted orphan KRIs). SOA-flavored candidates dropped with reason `out_of_scope_soa`.** | **Step 3.5** |
 | `gaps_report.json` | **BLOCKING gate** — section coverage + LLM-judged obligation coverage + H4 SAF heuristic; `pass_gate` + unresolved-gap counts | Step 3A/3A+ |
-| `accuracy_report_full.json` | **100% KRI accuracy judging — 5-judge cross-model panel verdicts, consensus results, auto-corrections, user decisions, blocking gate status** | **Step 3B** |
+| `accuracy_report_full.json` | **100% KRI accuracy judging — 5-judge Gemini 3.5 Flash panel verdicts, consensus results, auto-corrections, user decisions, blocking gate status** | **Step 3B** |
 | `consistency_report.json` | Cross-KRI consistency check | Step 3C |
 | `verify_report.json` | Full verbatim verification results | Step 3D |
 | `extracted_kris.json` | All KRIs assembled (4 in-scope domains, including promoted orphans from Step 3.5) | Step 4A |
@@ -1092,26 +1090,26 @@ The final `comparison_report.json` contains:
 
 ---
 
-## Multi-Model Extraction (Gemini + Claude Competition)
+## Single-Model Extraction Panel (Gemini 3.5 Flash, thinking-high)
 
-The skill uses **competing models** for domain extraction to eliminate same-model bias:
+Every multi-agent panel in this skill runs on a **single model — Gemini 3.5 Flash at high thinking** (Item 1; matches the `golden-set-binary-rule-distiller` skill). No Claude sub-agents are used in the panels.
 
 **Architecture per domain:**
 ```
-5 Claude agents (via Claude Code subagents)     ─┐
-                                                  ├─→ Adjudication (Claude) → final KRIs
-5 Gemini agents (via scripts/gemini_extract.py)  ─┘
+10 Gemini 3.5 Flash agents (thinking-high, temperature-spread, native PDF)
+   via scripts/gemini_extract.py  ─→ cluster/merge → consensus tiers → Step 2.6
 ```
 
-**Why multi-model matters:**
-- Same-model agents share biases — when 5 Claudes agree on a wrong answer, adjudication can't catch it
-- Cross-model disagreement (Claude says X, Gemini says Y) is 3x more informative
-- Cross-model consensus (both agree) is near-certainty
-- Gemini has the lowest hallucination rate (~0.7%) and native PDF support
+**Why single-model + temperature spread:**
+- Independence comes from a temperature spread (≈0.1–0.55 across the 10 agents) plus multi-turn sub-area decomposition — not from a second model.
+- Gemini 3.5 Flash has native PDF ingestion and high-thinking reasoning, and keeps the 10-agent panel cost-tractable.
+- Model id (`gemini-3.5-flash`) and high-thinking config (`task="judge"` → 24576 budget) are set centrally in the secrets file + `gemini_extract.call_gemini`.
+- **Trade-off (explicit, intentional — Item 1):** a single-model panel loses cross-model diversity. The prior 5 Claude + 5 Gemini design is replaced.
+- **Scope note:** Item 1 converted the multi-agent *panels* (arrays) to Gemini. A few **single (non-panel) calls** remain on Claude by design — Step 3.5 candidate consolidation & cross-check, and Step 3B correction-equivalence — plus the single-call Step 1A manifest and Step 3A H4 check. These are not panels; convert them separately if a fully Claude-free skill is desired.
 
 **How to run Gemini agents (multi-turn with native PDF ingestion — PREFERRED for Phase 2):**
 
-Gemini agents use **multi-turn focused sub-area extraction with native PDF ingestion**. This matches Claude agents' iteration capability (via the Agent tool) and was validated to achieve Claude parity in KRI count on all 4 domains: ELIG 46 (vs Claude 43), SAF 37 (vs 32), END 42 (vs 40), OPS 75 (vs 70).
+Gemini agents use **multi-turn focused sub-area extraction with native PDF ingestion**. It was validated to achieve high KRI yield on all 4 domains: ELIG 46 (vs Claude 43), SAF 37 (vs 32), END 42 (vs 40), OPS 75 (vs 70).
 
 Each Gemini agent opens a chat session with the PDF uploaded, then runs domain-specific sub-area turns sequentially (e.g., for OPS: IP handling → Blinding → Randomization → Procedures → Docs → Appendices). The focused turns force exhaustive extraction within each sub-area rather than a single broad pass where the model self-limits.
 
@@ -1125,12 +1123,12 @@ from gemini_extract import run_gemini_extraction_multi_turn, save_gemini_results
 results = run_gemini_extraction_multi_turn(
     domain="END",              # "ELIG", "SAF", "END", or "OPS"
     pdf_path="/path/to/protocol.pdf",
-    n_agents=5,
+    n_agents=10,
 )
 save_gemini_results(results, out_dir, "END")
 ```
 
-**Scope**: The multi-turn method is used for Phase 2 domain extraction of ELIG, SAF, END, OPS. Claude sub-agents are unchanged (they already iterate via the Agent tool). SOA extraction is out of scope for this skill — handled by the separate `soa-kri-extractor` skill.
+**Scope**: The multi-turn method is used for Phase 2 domain extraction of ELIG, SAF, END, OPS. All Phase-2 extraction agents are Gemini 3.5 Flash (10 per domain). SOA extraction is out of scope for this skill — handled by the separate `soa-kri-extractor` skill.
 
 **Backward compatibility**: The original `run_gemini_extraction()` (single-shot, text prompt, no PDF) is kept for other uses — e.g., Step 3B accuracy judging, Step 3.5 orphan scan — where single-shot is appropriate.
 
@@ -1158,7 +1156,7 @@ KRIs found by only 1–3 agents (Tier 3) are NOT silently discarded. They enter 
 
 **Step T3-2.5 — Atomicity Check (NEW)** (deterministic): Apply the atomization-of-compound-clauses refinement from SKILL.md (preconditions "can it actually fail?" and "enumeration vs illustrative examples"). Rejects only genuinely-empty always-true tautologies (e.g., "Males or females") and illustrative-example splits. **Definitional rules are NOT rejected** (Quality Rule 14 — they are valid KRIs; downstream / the user filters them). Advances candidate if atomic. Implemented as Step 2.6 Layer 1.5.
 
-**Step T3-3 — 6-Judge Panel** (LLM): Dispatch to the same 6-judge neutral panel (3 Claude + 3 Gemini) used for T2 candidates. Each judge votes accept / reject / conditional with a ≤25-word reason. Implemented as Step 2.6 Layer 3.
+**Step T3-3 — 6-Judge Panel** (LLM): Dispatch to the same 6-judge neutral panel (6 Gemini 3.5 Flash, thinking-high) used for T2 candidates. Each judge votes accept / reject / conditional with a ≤25-word reason. Implemented as Step 2.6 Layer 3.
 
 **Step T3-4 — Aggregate Decision**: Apply Step 2.6 Layer 4 aggregate logic. ≥5 accept (≤1 reject) → auto-approve into Golden Set. ≥5 reject (≤1 accept) → auto-reject. Anything else → flag (see flagged-items handling in the "Step 2.6 Auto-Judgment" section below).
 
@@ -1174,7 +1172,7 @@ Runs per-domain, AFTER Step 2.5 Section Obligation Inventory and BEFORE Phase 3.
 
 **Distinction from other judging steps (critical — avoids confusion):**
 - Step 2.6 decides **INCLUSION in the Golden Set** — runs per-domain during Phase 2 on T2 + T3-promoted candidates only.
-- **Step 3B** decides **CORRECTNESS** of every KRI — runs after Phase 2 completion, 100% coverage, 5-judge panel (3 Claude + 2 Gemini). Different panel, different purpose. **Step 2.6 does NOT replace Step 3B.**
+- **Step 3B** decides **CORRECTNESS** of every KRI — runs after Phase 2 completion, 100% coverage, 5-judge panel (5 Gemini 3.5 Flash, thinking-high). Different panel, different purpose. **Step 2.6 does NOT replace Step 3B.**
 - **Step 3.5** orphan scan discovers **MISSED rules** — 6-agent panel, Phase 3. Different purpose.
 
 **4-layer engine per candidate** (implemented in `scripts/step2_6_autojudgment.py`):
@@ -1184,7 +1182,7 @@ Runs per-domain, AFTER Step 2.5 Section Obligation Inventory and BEFORE Phase 3.
 | Layer 1 — Verification gate | Verbatim `supporting_quote` substring + non-empty `rule_for_llm` + reference sanity. **Does NOT reject for non-binariness** (Quality Rule 15 — downstream filters non-binary rules) | Deterministic | auto-reject |
 | Layer 1.5 — Atomicity | Genuinely-empty always-true tautologies only (e.g. "Males or females"). **Definitional rules are KEPT** (Quality Rule 14 — a site can deviate by misapplying a definition) | Deterministic | auto-reject |
 | Layer 2 — Coverage/dedup | Already covered by an approved T1 KRI? | Deterministic | auto-reject |
-| Layer 3 — 6-judge neutral panel | 3 Claude + 3 Gemini independently vote accept / reject / conditional on this KRI | LLM | Layer 4 aggregates |
+| Layer 3 — 6-judge neutral panel | 6 Gemini 3.5 Flash judges (thinking-high) independently vote accept / reject / conditional on this KRI | LLM | Layer 4 aggregates |
 | Layer 4 — Aggregate | ≥5 accept + ≤1 reject → auto_approve. ≥5 reject + ≤1 accept → auto_reject. Anything else → flag. | Deterministic | flag goes to decision table |
 
 **Judge prompt**: all 6 judges share the same CRA-framed prompt (consistent with the 10-agent extraction panel). No personas. See `scripts/autojudgment_prompts.py`.
@@ -1262,13 +1260,13 @@ Keys are stored in `~/.claude/secrets/protocol-kri-extractor.json` (never in the
 ```json
 // ~/.claude/secrets/protocol-kri-extractor.json
 {
-  "gemini": { "api_key": "AIza...", "model": "gemini-2.5-pro-preview-05-06" },
+  "gemini": { "api_key": "AIza...", "model": "gemini-3.5-flash" },
   "openai": { "api_key": "", "model": "gpt-4o" },
   "xai":    { "api_key": "", "model": "grok-3" }
 }
 ```
 
-Only Gemini is required. OpenAI and xAI are optional — the skill gracefully falls back to Claude-only mode if their keys are empty.
+Gemini is required — all panels run on Gemini 3.5 Flash (thinking-high). OpenAI and xAI keys are unused.
 
 ---
 
@@ -1307,15 +1305,15 @@ This copies all artifacts (extracted_kris.json, Extracted_KRIs.xlsx, raw domain 
 - `references/kri_examples.md` — annotated KRI examples per in-scope category (ELIG, SAF, END, OPS)
 - `scripts/run.py` — single canonical pipeline entry point
 - `scripts/step1a_manifest.py` — Step 1A manifest builder: complete `section_inventory` (every TOC section + disposition, never omitted; best-fit forced for ambiguous sections) + derived `section_map` (ELIG/SAF/END/OPS) with PDF-validated contiguous page ranges
-- `scripts/step2_extract.py` — Step 2 KRI extraction (per-domain, 10-agent multi-model panel) with SOA-exclusion + scope-atomization methodology in every prompt; scope-aware clustering (won't merge different-scope rules)
+- `scripts/step2_extract.py` — Step 2 KRI extraction (per-domain, 10-agent single-model Gemini panel) with SOA-exclusion + scope-atomization methodology in every prompt; scope-aware clustering (won't merge different-scope rules)
 - `scripts/scope_signature.py` — canonical scope-conflict detector (time-scope / study-phase tags) shared by clustering and dedup so atomization splits are never re-merged (Fix #6)
 - `scripts/step2_5_obligation_inventory.py` — Step 2.5 section obligation inventory (per-domain, high-recall, NO obligation-marker pre-filter); builds the `{domain}_obligation_inventory.json` yardstick consumed by Step 3A
-- `scripts/gemini_extract.py` — Gemini API extraction agents (multi-model competition)
+- `scripts/gemini_extract.py` — Gemini API panel calls (single-model — Gemini 3.5 Flash, thinking-high; `call_gemini` + multi-turn extraction)
 - `scripts/step2_6_autojudgment.py` — Step 2.6 auto-judgment (4-layer engine)
 - `scripts/autojudgment_prompts.py` — neutral CRA-framed judge prompts
 - `scripts/step3_5_orphan_scan.py` — Protocol-wide orphan scan (6-agent panel, section + page sweeps, SOA-flavored candidates dropped as `out_of_scope_soa`, blocking gate)
 - `scripts/step3a_completeness.py` — Completeness gate (BLOCKING): section coverage + LLM-judged obligation coverage (against the Step 2.5 inventory) + H4 SAF heuristic; honors `gaps_resolutions.json`
-- `scripts/step3b_accuracy.py` — Full KRI accuracy judging at 100% coverage (5-judge cross-model panel, blocking gate)
+- `scripts/step3b_accuracy.py` — Full KRI accuracy judging at 100% coverage (5-judge Gemini 3.5 Flash panel, blocking gate)
 - `scripts/step3c_consistency.py` — Cross-KRI consistency check
 - `scripts/step3d_verify.py` — Full verbatim pdfplumber verification (blocking gate)
 - `scripts/step4a_assemble.py` — Assembly + Excel generation (4 in-scope domain sheets + Summary)
