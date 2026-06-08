@@ -1149,7 +1149,7 @@ KRIs found by only 1–3 agents (Tier 3) are NOT silently discarded. They enter 
 
 **Step T3-2 — Verbatim Verification** (deterministic): Verify the `supporting_quote` is a verbatim substring of the cited page (Step 3D-style pdfplumber check), the `rule_for_llm` is binary/machine-readable, and the `protocol_reference` resolves to a real page. Any fail → discard with explicit documented reason. Implemented as Step 2.6 Layer 1.
 
-**Step T3-2.5 — Atomicity Check (NEW)** (deterministic): Apply the atomization-of-compound-clauses refinement from SKILL.md (preconditions "can it actually fail?" and "enumeration vs illustrative examples"). Rejects always-true clauses (e.g., "Males or females"), illustrative-example splits, and pure definitions without a verifiable action. Advances candidate if atomic. Implemented as Step 2.6 Layer 1.5.
+**Step T3-2.5 — Atomicity Check (NEW)** (deterministic): Apply the atomization-of-compound-clauses refinement from SKILL.md (preconditions "can it actually fail?" and "enumeration vs illustrative examples"). Rejects only genuinely-empty always-true tautologies (e.g., "Males or females") and illustrative-example splits. **Definitional rules are NOT rejected** (Quality Rule 14 — they are valid KRIs; downstream / the user filters them). Advances candidate if atomic. Implemented as Step 2.6 Layer 1.5.
 
 **Step T3-3 — 6-Judge Panel** (LLM): Dispatch to the same 6-judge neutral panel (3 Claude + 3 Gemini) used for T2 candidates. Each judge votes accept / reject / conditional with a ≤25-word reason. Implemented as Step 2.6 Layer 3.
 
@@ -1174,8 +1174,8 @@ Runs per-domain, AFTER Step 2.5 Section Obligation Inventory and BEFORE Phase 3.
 
 | Layer | What it checks | Type | Failure → |
 |---|---|---|---|
-| Layer 1 — Verification gate | Verbatim `supporting_quote` substring + binary `rule_for_llm` + reference sanity | Deterministic | auto-reject |
-| Layer 1.5 — Atomicity | Always-true / illustrative-examples / pure-definition violations (atomization refinement) | Deterministic | auto-reject |
+| Layer 1 — Verification gate | Verbatim `supporting_quote` substring + non-empty `rule_for_llm` + reference sanity. **Does NOT reject for non-binariness** (Quality Rule 15 — downstream filters non-binary rules) | Deterministic | auto-reject |
+| Layer 1.5 — Atomicity | Genuinely-empty always-true tautologies only (e.g. "Males or females"). **Definitional rules are KEPT** (Quality Rule 14 — a site can deviate by misapplying a definition) | Deterministic | auto-reject |
 | Layer 2 — Coverage/dedup | Already covered by an approved T1 KRI? | Deterministic | auto-reject |
 | Layer 3 — 6-judge neutral panel | 3 Claude + 3 Gemini independently vote accept / reject / conditional on this KRI | LLM | Layer 4 aggregates |
 | Layer 4 — Aggregate | ≥5 accept + ≤1 reject → auto_approve. ≥5 reject + ≤1 accept → auto_reject. Anything else → flag. | Deterministic | flag goes to decision table |

@@ -31,11 +31,16 @@ GUARDRAILS — apply to every KRI you judge:
    KRI is essentially "procedure happened at visit Y", "visit X within ±N days",
    or any other SOA-flavored pattern, REJECT with reason "out_of_scope_soa".
 
-4. **Binary rule_for_llm**: the rule must produce a clear YES/NO on subject data.
-   Narrative prose, vague descriptions = reject. When the protocol itself uses
-   qualitative language (e.g., "in the investigator's opinion", "as soon as
-   possible"), KEEP the candidate and preserve the qualitative wording verbatim —
-   downstream filtering of non-binary rules happens outside this skill.
+4. **Do NOT reject for non-binariness, vagueness, or being definitional/conditional/
+   judgment-based.** This skill does NOT filter non-binary rules — that happens
+   downstream (Quality Rule 15). The user filters them later. KEEP (never reject for
+   this reason):
+     - definitional rules ("X is defined as ...", "X does not include ...") — Quality Rule 14
+     - conditional rules and permissions ("permitted if stable", "only when instructed")
+     - investigator- or sponsor-decision rules ("in the investigator's opinion",
+       "according to Sponsor instruction", "as clinically appropriate")
+     - qualitative protocol wording ("as soon as possible") — preserve it verbatim
+   Reject ONLY for the reasons in guardrails 1–3 and 5.
 
 5. **Coverage**: if the KRI duplicates an approved Tier-1 KRI already covered by
    the deterministic dedup filter, it should already have been caught by Layer 2.
@@ -51,12 +56,12 @@ JUDGE_PROMPT = """You are a clinical research associate (CRA) and protocol exper
 You receive ONE candidate KRI at a time, along with the extraction-panel vote count and per-layer auto-judgment results. Based on:
   - the KRI's `rule_for_llm`,
   - its `supporting_quote` and `protocol_reference`,
-  - its atomicity and binary-verifiability,
-  - whether it is a genuine protocol obligation,
+  - its atomicity (one check per rule),
+  - whether it is a genuine protocol statement (obligation, permission, condition, definition, or governance rule),
 
 decide one of three verdicts:
-  - "accept" — the KRI captures a real protocol obligation, atomic, verifiable, correctly framed
-  - "reject" — the KRI is not a real obligation, misrepresents the protocol, or fails atomicity/verifiability
+  - "accept" — the KRI captures a real protocol statement, atomic, faithfully framed. It need NOT be binary or quantitative — definitional, conditional, and judgment-based rules are acceptable.
+  - "reject" — ONLY for: the `supporting_quote` is fabricated / not on the cited page; the KRI is not a real protocol statement (invented); it is SOA out-of-scope; or it is a true duplicate of an approved KRI. Do NOT reject merely because a rule is non-binary, vague, definitional, conditional, or judgment-based.
   - "conditional" — the KRI is close to acceptable but needs a minor edit (note the edit in your reason)
 
 Provide a ONE-sentence reason (≤25 words) citing specific protocol wording or the specific guardrail that informs your vote.
