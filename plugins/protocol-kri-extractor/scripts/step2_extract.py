@@ -1,9 +1,10 @@
 """
 Step 2 — Per-Section KRI Extraction (ELIG / SAF / END / OPS)
 
-10-agent panel per domain: 5 Claude + 5 Gemini agents run independently, then
-their outputs are merged and clustered with SequenceMatcher to set proper
-agent_count for Step 2.6 tier classification.
+10-agent panel per domain: 10 Gemini 3.5 Flash agents (thinking-high) run
+independently with a temperature spread for independence, then their outputs are
+merged and clustered with SequenceMatcher to set proper agent_count for Step 2.6
+tier classification. Single-model panel (Item 1) — no Claude sub-agents.
 
 Schedule of Activities (SOA) is OUT OF SCOPE for this skill — handled by the
 separate `soa-kri-extractor` skill. Every extractor prompt below carries the
@@ -14,7 +15,6 @@ Protocol-agnostic — driven entirely by the manifest's section map.
 
 import json, sys, re, os
 import pdfplumber
-import anthropic
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from difflib import SequenceMatcher
 from scope_signature import scope_conflict  # Fix #6 — scope-aware clustering
@@ -270,137 +270,6 @@ def get_section_pages(sections: list, total_pages: int) -> list:
     return sorted(pages)
 
 
-# ─── Claude single-agent extraction ──────────────────────────────────────────
-
-def extract_single_call(client, pdf_path, manifest,
-                        category, cfg, pages, output_dir,
-                        temperature=0.2) -> tuple:
-    """Run one Claude extraction call. Returns (kris_list, tokens_used)."""
-    protocol_text = extract_pages_text(pdf_path, pages)
-    protocol_id = manifest.get("protocol_id", "UNKNOWN")
-
-    section_list = "\n".join(
-        f"  - Section {s['section_number']}: {s['title']}"
-        for s in manifest.get("section_map", {}).get(category, [])
-    )
-
-    prompt = f"""You are extracting KRIs (Key Risk Indicators) from a clinical trial protocol.
-
-PROTOCOL: {protocol_id}
-CATEGORY: {category} — {cfg['label']}
-SECTIONS TO COVER:
-{section_list}
-
-EXTRACTION INSTRUCTIONS:
-{cfg['instructions']}
-
-KRI SCHEMA (every KRI must match this exactly):
-{KRI_SCHEMA}
-
-ID FORMAT for this category:
-- {category}: use subcategory codes {list(cfg['subcategories'].keys())}
-- Example IDs: {cfg['id_prefix']}-{list(cfg['subcategories'].keys())[0]}-001, {cfg['id_prefix']}-{list(cfg['subcategories'].keys())[0]}-002
-
---- PROTOCOL TEXT ---
-{protocol_text}
---- END ---
-
-Return a JSON array of KRI objects. Every rule or requirement in the protocol text
-that a CRA would need to verify must become a KRI.
-Return ONLY the JSON array, starting with [ and ending with ]."""
-
-    response = client.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=8000,
-        temperature=temperature,
-        messages=[{"role": "user", "content": prompt}],
-        system=SYSTEM_PROMPT
-    )
-
-    raw = response.content[0].text.strip()
-    raw = re.sub(r'^```[a-z]*\n?', '', raw)
-    raw = re.sub(r'\n?```$', '', raw)
-
-    kris, tokens_repair = _safe_json_loads_kris(raw, client, category, output_dir)
-    tokens = response.usage.input_tokens + response.usage.output_tokens + tokens_repair
-    return kris, tokens
-
-
-# ─── Robust JSON parsing for LLM responses ───────────────────────────────────
-
-def _safe_json_loads_kris(raw: str, client, category: str, output_dir: str = None):
-    """Parse model output as JSON, applying common cleanups + a one-shot repair pass on failure.
-
-    Returns (parsed_list, tokens_used_in_repair).
-    """
-    repair_tokens = 0
-
-    def _try(text):
-        try:
-            obj = json.loads(text)
-            if isinstance(obj, dict) and "kris" in obj:
-                obj = obj["kris"]
-            if not isinstance(obj, list):
-                return None
-            return [k for k in obj if isinstance(k, dict)]
-        except (json.JSONDecodeError, TypeError):
-            return None
-
-    parsed = _try(raw)
-    if parsed is not None:
-        return parsed, repair_tokens
-
-    # Cleanup pass 1 — quotes + trailing commas + array carve-out
-    cleaned = raw
-    cleaned = cleaned.replace("“", '"').replace("”", '"')
-    cleaned = cleaned.replace("‘", "'").replace("’", "'")
-    cleaned = re.sub(r',\s*([}\]])', r'\1', cleaned)
-    m = re.search(r'\[[\s\S]*\]', cleaned)
-    if m:
-        cleaned = m.group(0)
-
-    parsed = _try(cleaned)
-    if parsed is not None:
-        return parsed, repair_tokens
-
-    # One-shot model-driven repair
-    print(f"  JSON parse failed for {category} — invoking repair pass...")
-    repair_prompt = (
-        "The following text was supposed to be a JSON array of KRI objects but failed to parse. "
-        "Return ONLY a corrected JSON array with the same content (start with [ and end with ]). "
-        "Do not add or remove any KRI; only fix syntax issues (unescaped quotes, trailing commas, malformed strings). "
-        "No markdown fences, no prose, no explanation.\n\n"
-        f"BROKEN JSON:\n{raw[:60000]}"
-    )
-    try:
-        rsp = client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=8000,
-            messages=[{"role": "user", "content": repair_prompt}],
-            system="You repair JSON. You return only valid JSON arrays — nothing else.",
-        )
-        repair_text = rsp.content[0].text.strip()
-        repair_text = re.sub(r'^```[a-z]*\n?', '', repair_text)
-        repair_text = re.sub(r'\n?```$', '', repair_text)
-        repair_tokens = rsp.usage.input_tokens + rsp.usage.output_tokens
-        parsed = _try(repair_text)
-        if parsed is not None:
-            return parsed, repair_tokens
-    except Exception as e:
-        print(f"  Repair-pass call failed: {e}")
-
-    # Last resort — log raw output, return empty
-    if output_dir:
-        debug_path = os.path.join(output_dir, f"_raw_{category}_unparseable.txt")
-        try:
-            with open(debug_path, "w", encoding="utf-8") as f:
-                f.write(raw)
-            print(f"  Saved unparseable output to {debug_path}; returning 0 KRIs for {category}.")
-        except Exception:
-            pass
-    return [], repair_tokens
-
-
 def _strip_outer_quotes(s):
     if not isinstance(s, str):
         return s
@@ -481,44 +350,6 @@ def _normalize_kris(kris, category):
 
 # ─── 10-agent panel extraction ────────────────────────────────────────────────
 
-def _run_claude_panel(client, pdf_path, manifest, category, cfg, pages,
-                      output_dir, n_agents=5):
-    """Run N Claude agents in parallel (ThreadPoolExecutor). Returns list of (label, kris)."""
-    temperatures = [0.1, 0.2, 0.3, 0.15, 0.25][:n_agents]
-    agent_results = [None] * n_agents
-
-    def _call(agent_idx):
-        temp = temperatures[agent_idx]
-        kris, tokens = extract_single_call(
-            client, pdf_path, manifest, category, cfg, pages, output_dir,
-            temperature=temp
-        )
-        label = f"C{agent_idx + 1}"
-        print(f"  Claude agent {label} (temp={temp}): {len(kris)} KRIs ({tokens} tokens)")
-        return agent_idx, label, kris, tokens
-
-    total_tokens = 0
-    with ThreadPoolExecutor(max_workers=n_agents) as executor:
-        futures = {executor.submit(_call, i): i for i in range(n_agents)}
-        for future in as_completed(futures):
-            try:
-                idx, label, kris, tokens = future.result()
-                agent_results[idx] = (label, kris)
-                total_tokens += tokens
-            except Exception as e:
-                idx = futures[future]
-                print(f"  Claude agent C{idx+1} ERROR: {e}")
-                agent_results[idx] = (f"C{idx+1}", [])
-
-    # Save per-agent raw files
-    for label, kris in agent_results:
-        path = os.path.join(output_dir, f"claude_agent_{label}_{category.lower()}.json")
-        with open(path, "w") as f:
-            json.dump(kris, f, indent=2)
-
-    return agent_results, total_tokens
-
-
 def _run_gemini_panel(pdf_path, category, output_dir, n_agents=5):
     """Run N Gemini agents via multi-turn native PDF extraction.
     Returns list of (label, kris) tuples, or raises on unrecoverable error.
@@ -555,8 +386,6 @@ def run_extraction(pdf_path: str, manifest_path: str,
     protocol_id = manifest.get("protocol_id", "UNKNOWN")
     cats = categories or ["ELIG", "SAF", "END", "OPS"]
 
-    client = anthropic.Anthropic()
-
     with pdfplumber.open(pdf_path) as pdf:
         total_pages = len(pdf.pages)
 
@@ -583,26 +412,13 @@ def run_extraction(pdf_path: str, manifest_path: str,
         print(f"  Pages: {pages[:5]}{'...' if len(pages) > 5 else ''} ({len(pages)} total)")
 
         try:
-            # ── Step 1: 5 Claude agents in parallel ──────────────────────────
-            print(f"\n  [Claude panel — 5 agents]")
-            claude_results, claude_tokens = _run_claude_panel(
-                client, pdf_path, manifest, cat, cfg, pages, output_dir, n_agents=5
-            )
-            total_tokens += claude_tokens
-            claude_only_mode = False
+            # ── 10 Gemini 3.5 Flash agents (thinking-high), temperature-spread
+            #    for independence. Single-model panel (Item 1) — no Claude sub-agents.
+            print(f"\n  [Gemini panel — 10 agents (gemini-3.5-flash, thinking-high)]")
+            gemini_results = _run_gemini_panel(pdf_path, cat, output_dir, n_agents=10)
 
-            # ── Step 2: 5 Gemini agents (sequential internally) ──────────────
-            print(f"\n  [Gemini panel — 5 agents]")
-            try:
-                gemini_results = _run_gemini_panel(pdf_path, cat, output_dir, n_agents=5)
-            except Exception as gemini_err:
-                print(f"\n  WARNING: Gemini panel failed ({gemini_err})")
-                print(f"  Continuing with Claude-only mode (5 agents, max agent_count=5)")
-                gemini_results = []
-                claude_only_mode = True
-
-            # ── Step 3: Merge & cluster all agent outputs ────────────────────
-            all_agent_kris = claude_results + gemini_results
+            # ── Merge & cluster all agent outputs ────────────────────────────
+            all_agent_kris = gemini_results
             total_agents = len(all_agent_kris)
             print(f"\n  Clustering outputs from {total_agents} agents...")
 
@@ -630,11 +446,9 @@ def run_extraction(pdf_path: str, manifest_path: str,
                 "protocol_id": protocol_id,
                 "category": cat,
                 "kri_count": len(merged_kris),
-                "tokens_used": claude_tokens,
-                "agents_claude": len(claude_results),
+                "panel": "10x gemini-3.5-flash (thinking-high)",
                 "agents_gemini": len(gemini_results),
                 "total_agents": total_agents,
-                "claude_only_mode": claude_only_mode,
             }
 
             out_path = os.path.join(output_dir, f"raw_{cat}.json")
@@ -649,7 +463,6 @@ def run_extraction(pdf_path: str, manifest_path: str,
     print(f"\n{'='*55}")
     print(f"Extraction complete.")
     print(f"Total KRIs: {sum(len(v) for v in all_results.values())}")
-    print(f"Total Claude tokens: {total_tokens}")
     for cat, kris in all_results.items():
         print(f"  {cat}: {len(kris)} KRIs")
 
@@ -667,7 +480,7 @@ if __name__ == "__main__":
     cats = args.cats.split(",") if args.cats else None
     print(f"\n{'='*55}")
     print(f"Extracting KRIs: {os.path.basename(args.pdf)}" + (f" (categories: {cats})" if cats else " (all in-scope categories)"))
-    print(f"Mode: 10-agent panel (5 Claude + 5 Gemini) with SequenceMatcher clustering")
+    print(f"Mode: 10-agent Gemini panel (gemini-3.5-flash, thinking-high) with SequenceMatcher clustering")
 
     run_extraction(
         pdf_path=args.pdf,

@@ -84,7 +84,7 @@ def call_gemini(prompt: str, system_prompt: str = None, temperature: float = 0.2
     is_non_thinking = any(tag in model for tag in ["flash-lite", "2.0-flash", "1.5"])
     if not is_non_thinking:
         try:
-            budget = 24576 if task == "judge" else 16384
+            budget = 24576  # high thinking for all panels (Item 1: Gemini 3.5 Flash, thinking-high)
             config.thinking_config = types.ThinkingConfig(thinking_budget=budget)
         except Exception:
             pass  # SDK version may not support thinking_config — proceed without it
@@ -424,7 +424,7 @@ def run_gemini_extraction_multi_turn(
             is_non_thinking = any(tag in model for tag in ["flash-lite", "2.0-flash", "1.5"])
             if not is_non_thinking:
                 try:
-                    config.thinking_config = types.ThinkingConfig(thinking_budget=16384)
+                    config.thinking_config = types.ThinkingConfig(thinking_budget=24576)
                 except Exception:
                     pass
 
