@@ -100,7 +100,7 @@ The monitor maintains and checks this artifact checklist throughout execution:
 
 | Step | Required Artifact(s) | Verified? |
 |------|---------------------|-----------|
-| 1A | `manifest.json` (ELIG/SAF/END/OPS section map only — no SOA mapping) | |
+| 1A | `manifest.json` — must contain a COMPLETE `section_inventory` (every TOC section with a disposition: ELIG/SAF/END/OPS, `out_of_scope_soa`, or `non_substantive` — never omitted) plus the derived `section_map` (ELIG/SAF/END/OPS only). No in-scope section may be missing from the inventory. | |
 | 2 (per domain) | `raw_{DOMAIN}.json` for each of ELIG/SAF/END/OPS, `{DOMAIN}_adjudication.json` | |
 | 2 (multi-model) | 5 Claude agent outputs + 5 Gemini agent outputs per domain | |
 | 2 (consensus) | Tier 1 auto-approved, Tier 2 decision table shown to user, Tier 3 → promotion pipeline (`{domain}_tier3_filtered.json`) | |
@@ -494,7 +494,7 @@ Read `references/steps.md` for the detailed prompt templates and logic for each 
 
 ### Phase 1 — Discover
 
-**Step 1A — Manifest**: Read cover pages + TOC. Map every protocol section to one of the 4 in-scope domains (ELIG, SAF, END, OPS). Schedule-of-Activities sections (the SoA table, its footnote pages, and any narrative section primarily devoted to visit schedule or "procedure at visit" rules) are left **unmapped** — they are out of scope for this skill and handled by the separate `soa-kri-extractor` skill. The manifest is the single source of truth for which pages each downstream extractor and the orphan scan are allowed to read.
+**Step 1A — Manifest**: Read cover pages + TOC. Produce a **complete `section_inventory`** — EVERY section/sub-section/appendix in the TOC listed exactly once, each with a **disposition**: one of the 4 in-scope domains (ELIG, SAF, END, OPS), `out_of_scope_soa`, or `non_substantive`. **A section is NEVER silently omitted** — a section with no obvious domain is forced into its single best-fit in-scope domain (with `confidence: "low"` and a note), never dropped. `non_substantive` is reserved for genuinely rule-free sections (title page, TOC, abbreviations, references, signature page); conduct-governing sections (concomitant/prohibited medications, dose modification, discontinuation/withdrawal, informed consent, deviation handling, blinding) are ALWAYS in-scope. Schedule-of-Activities sections are tagged `out_of_scope_soa` (handled by the separate `soa-kri-extractor` skill) — listed in the inventory but not mapped to a domain. Each section's page range is then **validated against the actual PDF** (heading detected in the body; ranges made contiguous) so a short TOC estimate cannot cause pages to be skipped. The per-domain `section_map` is **derived deterministically** from the inventory (in-scope dispositions only) and remains the source of truth for which pages each downstream extractor and the orphan scan read.
 
 ### Phase 2 — Extract (4-domain multi-model panel)
 
@@ -985,7 +985,7 @@ Each pipeline run produces these files in the output directory:
 
 | File | Description | Source |
 |------|-------------|--------|
-| `manifest.json` | Protocol metadata + section map (ELIG/SAF/END/OPS — SOA pages left unmapped, out of scope) | Step 1A |
+| `manifest.json` | Protocol metadata + complete `section_inventory` (every TOC section + disposition, never omitted) + derived `section_map` (ELIG/SAF/END/OPS; SOA tagged `out_of_scope_soa`, not mapped) with PDF-validated page ranges | Step 1A |
 | `raw_ELIG.json` | Eligibility KRIs | Step 2 |
 | `raw_SAF.json` | Safety KRIs | Step 2 |
 | `raw_END.json` | Endpoint + governance KRIs | Step 2 |
@@ -1292,7 +1292,7 @@ This copies all artifacts (extracted_kris.json, Extracted_KRIs.xlsx, raw domain 
 - `references/steps.md` — detailed LLM prompt templates for each step (each domain extractor prompt carries the "Out of scope — SOA" methodology block)
 - `references/kri_examples.md` — annotated KRI examples per in-scope category (ELIG, SAF, END, OPS)
 - `scripts/run.py` — single canonical pipeline entry point
-- `scripts/step1a_manifest.py` — Step 1A manifest builder (ELIG/SAF/END/OPS section map)
+- `scripts/step1a_manifest.py` — Step 1A manifest builder: complete `section_inventory` (every TOC section + disposition, never omitted; best-fit forced for ambiguous sections) + derived `section_map` (ELIG/SAF/END/OPS) with PDF-validated contiguous page ranges
 - `scripts/step2_extract.py` — Step 2 KRI extraction (per-domain, 10-agent multi-model panel) with SOA-exclusion methodology in every prompt
 - `scripts/gemini_extract.py` — Gemini API extraction agents (multi-model competition)
 - `scripts/step2_6_autojudgment.py` — Step 2.6 auto-judgment (4-layer engine)
