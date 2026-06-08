@@ -57,11 +57,11 @@ You always return valid JSON with no markdown fences, no prose, no extra text.""
 
 ## Step 1A — Protocol Manifest
 
-**Purpose**: Read cover + TOC pages, produce `manifest.json`.
+**Purpose**: Read cover + TOC pages, produce `manifest.json` with a COMPLETE `section_inventory` (every TOC section + a disposition — **never omitted**) plus a derived `section_map`.
 
-**PDF pages to read**: Cover pages (1–3) + TOC pages (search first 40 pages for a page with 5+ numbered section lines containing dots or page numbers).
+**PDF pages to read**: Cover pages (1–3) + TOC pages.
 
-**LLM prompt**:
+**LLM prompt** (the authoritative prompt lives in `scripts/step1a_manifest.py`):
 ```
 Read the following pages from a clinical trial protocol and extract the manifest.
 
@@ -79,32 +79,45 @@ Return a JSON object:
   "phase": "e.g. IIb, III",
   "therapeutic_area": "cardiovascular|oncology|immunology|neurology|musculoskeletal|other",
   "total_pages": N,
-  "section_map": {
-    "ELIG": [...],
-    "SAF":  [...],
-    "END":  [...],
-    "OPS":  [...]
-  }
+  "toc_pages": [...],
+  "section_inventory": [
+    {
+      "section_number": "e.g. 8.1, 12",
+      "title": "section title exactly as it appears in the TOC",
+      "pages_approx": [start_page, end_page],
+      "disposition": "ELIG | SAF | END | OPS | out_of_scope_soa | non_substantive",
+      "confidence": "high | low",
+      "notes": "for low confidence / partial-or-multi-domain coverage, else null"
+    }
+  ]
 }
 
-Domain categories (the only 4 in scope for this skill):
-- ELIG: Eligibility — inclusion criteria, exclusion criteria, randomization criteria
-- SAF:  Safety & Toxicity — AE/SAE reporting, stopping rules, toxicity management
-- END:  Endpoints & Statistics — objectives, endpoints, analysis sets, statistical methods
-- OPS:  Operations & Compliance — IMP handling, blinding, records, regulatory
+Dispositions:
+- ELIG / SAF / END / OPS — the 4 in-scope domains (Eligibility; Safety & Toxicity;
+  Endpoints & Statistics; Operations & Compliance). Assign the single best-fit one.
+- out_of_scope_soa — Schedule-of-Activities content (SoA table, its footnotes,
+  visit-schedule narrative, "procedure × visit" cells). Handled by the separate
+  `soa-kri-extractor` skill. It is STILL LISTED in section_inventory with this
+  disposition — never omitted — but it is not mapped to a domain.
+- non_substantive — ONLY genuinely rule-free sections (title page, table of
+  contents, abbreviations/glossary, references, signature page).
 
-Out of scope (handled by `soa-kri-extractor`):
-- SOA — Schedule of Activities. Sections primarily about the SoA table, its
-  footnotes, visit schedule, visit windows, or "procedure × visit" cells must
-  be LEFT UNMAPPED. Do not add an "SOA" key. Do not classify SoA sections under
-  any other domain either — just omit them from `section_map`.
+COMPLETENESS IS MANDATORY — NEVER OMIT A SECTION. Every numbered section, sub-
+section, and appendix in the TOC appears exactly once in section_inventory, each
+with a disposition. There is no "drop it" option.
 
-Rules:
-- Each section goes in at most one category (its PRIMARY domain)
-- pages_approx: use [null, null] if page numbers not visible in TOC
-- SoA sections (Schedule of Activities, visit schedule, procedure matrix, footnote pages, visit-window narrative) are LEFT UNMAPPED — they are out of scope for this skill
-- Return ONLY the JSON object
+BEST-FIT, NOT PERFECT-FIT. An ambiguous or multi-domain section STILL gets its
+single closest in-scope domain with "confidence":"low" and a note — never dropped,
+never hidden under non_substantive. Conduct-governing sections (concomitant /
+prohibited medications, dose modification, discontinuation/withdrawal, informed
+consent, deviation handling, blinding) are ALWAYS in-scope (typically SAF or OPS).
+
+Return ONLY the JSON object.
 ```
+
+**Post-processing (deterministic, in `step1a_manifest.py`)**:
+- **Page-range validation** — locate each section's body heading in the actual PDF and make ranges contiguous, so a short/wrong TOC estimate cannot cause an in-scope section's pages to be skipped by the extractor.
+- **Derive `section_map`** (ELIG/SAF/END/OPS only) from `section_inventory`. `out_of_scope_soa` / `non_substantive` sections remain in the inventory but are NOT mapped (no extractor reads them). The Step 3A completeness gate audits every in-scope section in the inventory.
 
 **Save output**: `{out_dir}/manifest.json`
 
@@ -564,50 +577,30 @@ Apply all deletions, then re-save `extracted_kris.json` and regenerate the Excel
 
 ## Step 2.5 — Section Obligation Inventory (MANDATORY, runs after each domain extraction)
 
-**Purpose**: After completing extraction for a domain (and before proceeding to Phase 3), scan every sentence in that domain's assigned protocol sections for obligation markers. This catches obligations that all 10 agents missed.
+**Purpose**: After completing extraction for a domain (and before Step 2.6), build the **completeness yardstick** for that domain — a high-recall inventory of every conduct-constraining statement in its mapped sections. Step 3A measures coverage against this and blocks on gaps. Implemented in `scripts/step2_5_obligation_inventory.py`.
 
-**Input**: Full text of all protocol sections assigned to this domain (from `manifest.json`) + all KRIs already extracted for this domain.
+**Input**: Full text of all sections mapped to this domain (from `manifest.section_map`).
 
 **Process**:
 
-1. **Scan every sentence** in the domain's protocol sections for obligation markers:
-   - Hard obligations: "must", "shall", "is required to", "is prohibited"
-   - Temporal obligations: "within [N] hours/days/weeks", "no later than", "at least [N] days before"
-   - Submission obligations: "submitted to", "reported to", "notified", "communicated to"
-   - Definitional boundaries: "is defined as", "does not include", "is not [X] when", "excludes"
-   - Dose/threshold triggers: "if [condition], then [action]", "≤ [value]", "≥ [value]"
+1. **Capture every conduct-constraining statement with MAXIMUM RECALL — NO obligation-marker pre-filter.** Do NOT restrict to "must / shall / prohibited / within-N". Capture equally: obligations and requirements (with or without "must"); **permissions and conditional permissions** ("permitted if the dosage is stable"); prohibitions; definitions and definitional boundaries; timing / window rules; thresholds and dose triggers; methods; governance / documentation rules; and sponsor- or investigator-decision conditionals. When in doubt, INCLUDE. Over-capture is correct — the user filters later, and a missed sentence becomes an undetectable coverage gap. (The marker-based pre-filter used by earlier versions is removed: it dropped real in-scope rules, e.g. permitted-therapy stability conditions phrased as permissions.) Mechanism: one high-recall LLM pass per mapped section.
 
-2. **For each obligation sentence found**, check whether it is covered by an existing KRI's `supporting_quote` (via substring match after normalizing whitespace).
+2. **If one sentence carries several independent constraints** (e.g. "prohibited prior to AND during the study"), emit one entry per independent constraint.
 
-3. **Uncovered obligation sentences** → automatically promoted to **Tier 3** for the Tier 3 Promotion Pipeline (Step T3-1 → T3-2 → T3-3 → decision table).
-
-4. **Save artifact**: `{out_dir}/{domain}_obligation_inventory.json`
+3. **Save artifact**: `{out_dir}/{domain}_obligation_inventory.json` — schema `obligations: [{sentence, page, section, type, severity}]` (exactly what Step 3A reads).
 
 ```json
 {
+  "_meta": {"step": "2.5", "domain": "SAF", "sections_scanned": 7, "obligations_found": 84},
   "domain": "SAF",
-  "sections_scanned": ["Section 7.1", "Section 7.2", "..."],
-  "total_obligation_sentences": 84,
-  "covered": 71,
-  "uncovered": 13,
   "obligations": [
-    {
-      "sentence": "All SAEs must be reported to the sponsor within 24 hours.",
-      "page": 55,
-      "covered_by": "SAF-AE-003",
-      "status": "covered"
-    },
-    {
-      "sentence": "Blood pressure must be measured in the sitting position.",
-      "page": 62,
-      "covered_by": null,
-      "status": "uncovered — promoted to Tier 3"
-    }
+    {"sentence": "Any SAE will be reported to the Sponsor within 24 hours.", "page": 84, "section": "15.6", "type": "timing", "severity": "CRITICAL"},
+    {"sentence": "permitted during the study if the dosage is stable for at least 2 months prior to Day 0", "page": 71, "section": "12.2", "type": "permission", "severity": "MAJOR"}
   ]
 }
 ```
 
-**Blocking**: Domain processing does not advance to Phase 3 until this artifact is written and all uncovered obligations have entered the Tier 3 pipeline.
+**Scope boundary (deliberate)**: Step 2.5 only **builds** the yardstick. It does NOT check coverage, does NOT create KRIs, and does NOT promote to Tier 3. Coverage measurement + gap-blocking is **Step 3A** (which reads this inventory); recovery of genuinely-missed rules is the **Step 3.5 orphan scan**. The three are complementary: 2.5 = yardstick, 3A = measure + block, 3.5 = find + add.
 
 ---
 
@@ -625,8 +618,8 @@ Apply all deletions, then re-save `extracted_kris.json` and regenerate the Excel
 
 | Layer | Type | Check |
 |---|---|---|
-| Layer 1 — Verification | Deterministic | Verbatim `supporting_quote` + binary `rule_for_llm` + parseable `protocol_reference` |
-| Layer 1.5 — Atomicity | Deterministic | Atomization refinement (rejects always-true clauses, pure definitions) |
+| Layer 1 — Verification | Deterministic | Verbatim `supporting_quote` + non-empty `rule_for_llm` + parseable `protocol_reference`. Does NOT reject for non-binariness (Quality Rule 15 — downstream filters non-binary rules) |
+| Layer 1.5 — Atomicity | Deterministic | Rejects only genuinely-empty always-true tautologies (e.g. "Males or females"). Definitional / conditional / judgment rules are KEPT (Quality Rule 14) |
 | Layer 2 — Coverage/dedup | Deterministic | Already covered by approved T1 KRI? |
 | Layer 3 — 6-judge panel | LLM | 3 Claude + 3 Gemini vote accept / reject / conditional on each KRI |
 | Layer 4 — Aggregate | Deterministic | ≥5 accept + ≤1 reject → auto_approve · ≥5 reject + ≤1 accept → auto_reject · else → flag |
@@ -674,19 +667,21 @@ This decouples overnight pipeline completion from user review. Default behavior 
 
 ---
 
-## Step 3A — Completeness Check
+## Step 3A — Completeness Gate (BLOCKING)
 
-**Purpose**: For each in-scope domain (ELIG, SAF, END, OPS), verify that every obligation sentence recorded in `{domain}_obligation_inventory.json` (Step 2.5) has at least one KRI whose `supporting_quote` covers it.
+**Purpose**: A blocking gate with two complementary coverage checks. Implemented in `scripts/step3a_completeness.py`; returns a pass/fail boolean to `run.py`'s gate framework.
 
-**Coverage check**: For each obligation sentence in `{domain}_obligation_inventory.json`, look for a KRI in `raw_{domain}.json` whose `supporting_quote` contains the obligation sentence (substring match after normalization). Uncovered obligations are promoted to Tier 3 via the Tier 3 promotion pipeline.
+**Check 1 — Section coverage**: every in-scope section in `manifest.section_inventory` (disposition ELIG/SAF/END/OPS) must have ≥1 KRI citing one of its pages. `out_of_scope_soa` / `non_substantive` are exempt. A still-empty in-scope section — after the Step 3.5 orphan scan already ran — is a gap.
 
-**Output**: `gaps_report.json` with per-domain `total_expected`, `total_covered`, `coverage_pct`, and the list of uncovered obligations.
+**Check 2 — Obligation coverage**: every statement in each `{domain}_obligation_inventory.json` (Step 2.5) must be covered by ≥1 KRI. Coverage is decided by an **LLM coverage judge** ("would a KRI catch a violation of this obligation?"), NOT substring matching — the high-recall inventory sentences are longer than the ≤30-word quotes. **Partial coverage of a compound obligation (e.g. the "prior to" half but not the "during the study" half) counts as NOT covered.** A domain with mapped sections but a missing inventory is a blocking error (Step 2.5 was not run).
 
-**Action**: If any CRITICAL obligation is uncovered after the T3 pathway → re-run Step 2 for the affected pages only and merge results.
+**Output**: `gaps_report.json` — `section_coverage`, `obligation_coverage_by_domain`, the H4 result, `pass_gate`, and unresolved-gap counts. Each obligation gap carries a `gap_key`.
+
+**Gate**: the pipeline cannot advance to Step 3B until 0 unresolved section gaps AND 0 unresolved obligation gaps. **Escape hatch** — a gap clears by (a) covering it with a KRI, (b) re-tagging the section `non_substantive` in the manifest, or (c) acknowledging it in `gaps_resolutions.json` (`{"sections": {"<num>": {"acknowledged": true, "reason": "…"}}, "obligations": {"<gap_key>": {"acknowledged": true, "reason": "…"}}}`), then re-run `--from 3a`.
 
 ### Step 3A+ — H4 SAF Heuristic (single retained heuristic)
 
-After the obligation-inventory completeness check, run one protocol-agnostic heuristic. (The prior H1–H10 heuristics were SOA-flavored — they checked procedure × visit relationships and SoA-table geometry — and were removed when SOA extraction moved to the separate `soa-kri-extractor` skill. Only H4 is retained, retargeted as a SAF heuristic.)
+After the Step 3A completeness gate's coverage checks, run one protocol-agnostic heuristic. (The prior H1–H10 heuristics were SOA-flavored — they checked procedure × visit relationships and SoA-table geometry — and were removed when SOA extraction moved to the separate `soa-kri-extractor` skill. Only H4 is retained, retargeted as a SAF heuristic.)
 
 **H4 — Adverse-Event Collection Window**: Verify that `raw_SAF.json` contains at least one KRI defining the AE collection window starting at first IP dose (e.g., "AEs collected from first IP administration through 30 days post-last-dose"). If absent, promote a candidate via the Tier 3 / orphan-scan pathway so the obligation is captured.
 
