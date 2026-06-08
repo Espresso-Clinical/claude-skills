@@ -107,7 +107,7 @@ The monitor maintains and checks this artifact checklist throughout execution:
 | 2 (per-domain checkpoint) | `{domain}_manual_review_decisions.json` — user acceptance/rejection record for all T2 + promoted T3 KRIs | |
 | 2.5 (obligation inventory) | `{domain}_obligation_inventory.json` — high-recall inventory of every conduct-constraining statement (NO obligation-marker pre-filter); the yardstick Step 3A measures coverage against | |
 | **3.5** | **`orphan_scan_report.json` (primary section sweep + secondary page sweep + consolidation + cross-check + classification + user decisions + promoted orphans appended to `raw_{DOMAIN}.json`). SOA-flavored candidates dropped with reason `out_of_scope_soa`.** | |
-| 3A | `gaps_report.json` (obligation-inventory coverage) + H4 SAF heuristic | |
+| 3A | `gaps_report.json` — BLOCKING gate: section coverage (every in-scope section cited by ≥1 KRI) + obligation coverage (LLM-judged, every Step 2.5 inventory statement covered) + H4 SAF heuristic; `pass_gate: true` with 0 unresolved gaps required | |
 | **3B** | **`accuracy_report_full.json` (100% KRI coverage, 5-judge cross-model panel, 0 FAIL, 0 unresolved FLAG — blocking)** | |
 | 3C | `consistency_report.json` | |
 | 3D | `verify_report.json` — must show 100% pass | |
@@ -450,7 +450,7 @@ pip install pdfplumber pymupdf openpyxl --break-system-packages -q
 
 **`bypassPermissions` permanent default**: `bypassPermissions` must be set as a permanent default for all pipeline runs — no approval prompts should interrupt extraction. Set this in the Claude Code session before invoking `run.py`.
 
-`scripts/run.py` is the **single canonical entry point** for the pipeline. It executes every documented step in the exact order defined in this file and enforces the three blocking gates (Step 3.5 orphan scan, Step 3B full accuracy judging, Step 3D verbatim verification). No step can be silently skipped, reordered, or softened.
+`scripts/run.py` is the **single canonical entry point** for the pipeline. It executes every documented step in the exact order defined in this file and enforces the four blocking gates (Step 3.5 orphan scan, Step 3A completeness gate, Step 3B full accuracy judging, Step 3D verbatim verification). No step can be silently skipped, reordered, or softened.
 
 ```bash
 python /path/to/scripts/run.py \
@@ -477,6 +477,7 @@ python run.py --help
 
 **Blocking gates** (pipeline stops with exit 1 if any fail):
 - **Step 3.5** — all USER_DECISION orphan candidates must be resolved
+- **Step 3A** — 0 unresolved section-coverage gaps AND 0 unresolved obligation-coverage gaps (every in-scope section cited by ≥1 KRI; every obligation in the Step 2.5 inventory covered, judged semantically). Gaps clear by covering them, re-tagging the section `non_substantive`, or acknowledging them in `gaps_resolutions.json`.
 - **Step 3B** — 0 FAIL and 0 unresolved FLAG across all KRIs (100% coverage)
 - **Step 3D** — 100% verbatim pass
 
@@ -543,7 +544,7 @@ After completing the 10-agent extraction for a domain (and before Step 2.6), bui
 
 **Step 3.5 — Protocol-Wide Orphan Scan (MANDATORY BLOCKING GATE, runs FIRST in Phase 3)**: Scan the ENTIRE protocol — section-by-section (primary) and page-by-page for any page not claimed by the section map (secondary sweep) — to find rule-like statements, obligations, thresholds, prohibitions, requirements, criteria, timings, or methods that were NOT captured by any domain extractor in Phase 2. Uses a **6-agent panel (3 Claude + 3 Gemini)** with high-recall candidate detection and consensus-based promotion. Promoted orphan KRIs are appended to the corresponding `raw_{DOMAIN}.json` file (one of the 4 in-scope domains: ELIG/SAF/END/OPS) so they flow through the rest of Phase 3 validation like any other KRI. **SOA-flavored candidates** (procedure-at-visit, visit-window, cross-visit-timing, SoA table content, SoA footnotes) **are dropped during candidate consolidation** with reason `"out_of_scope_soa"` — logged in the report for audit, but never promoted to a KRI in this skill. **The pipeline cannot advance to Step 3A until the orphan scan is complete and all user decisions are made.** See full spec below.
 
-**Step 3A — Completeness**: Every obligation sentence in each domain's `{domain}_obligation_inventory.json` (from Step 2.5) must have at least one KRI whose `supporting_quote` covers it. SOA-flavored obligations are skipped from this check — they are not in scope. Output: `gaps_report.json`.
+**Step 3A — Completeness Gate (MANDATORY BLOCKING GATE)**: Two complementary coverage checks, both blocking. **(1) Section coverage** — every in-scope section in `manifest.section_inventory` (disposition ELIG/SAF/END/OPS) must have at least one KRI citing one of its pages; `out_of_scope_soa` / `non_substantive` sections are exempt. A still-empty in-scope section (after the Step 3.5 orphan scan has already run) is a gap. **(2) Obligation coverage** — every conduct-constraining statement in each domain's `{domain}_obligation_inventory.json` (from Step 2.5) must be covered by ≥1 KRI. Coverage is decided by an **LLM coverage judge** (semantic — "would a KRI catch a violation of this obligation?"), NOT crude substring matching, because the high-recall inventory sentences are longer than the ≤30-word quotes. **Partial coverage of a compound obligation (e.g. the "prior to" half but not the "during the study" half) counts as NOT covered.** The prior vacuous behaviour (empty/missing inventory → 100%) is removed: a domain with mapped sections but a missing inventory is a **blocking error** (Step 2.5 was not run). **The pipeline cannot advance to Step 3B until Step 3A reports 0 unresolved section gaps and 0 unresolved obligation gaps.** A gap clears by (a) covering it with a KRI, (b) re-tagging the section `non_substantive` in the manifest, or (c) acknowledging it with a reason in `gaps_resolutions.json` (`{"sections": {"<num>": {"acknowledged": true, "reason": "…"}}, "obligations": {"<gap_key>": {"acknowledged": true, "reason": "…"}}}`). SOA-flavored obligations are out of scope and not checked. Output: `gaps_report.json`.
 
 **Step 3A+ — H4 SAF Heuristic — Adverse-Event Collection Window**: Single protocol-agnostic heuristic retained from the prior 10-heuristic set. Verifies that there is a SAF KRI defining the AE collection window starting at first IP dose (e.g., "AEs collected from first IP administration through 30 days post-last-dose"). If no such KRI exists in `raw_SAF.json`, promote a candidate via the orphan-scan pathway. This is the only retained heuristic — the prior H1, H2, H3, H5, H6, H7, H8, H9, H10 were SOA-flavored (visit × procedure relationships, SoA-table geometry) and were removed when SOA extraction moved to `soa-kri-extractor`. Implementation: inside `step3a_completeness.py`.
 
@@ -1001,7 +1002,7 @@ Each pipeline run produces these files in the output directory:
 | `{domain}_manual_review_decisions.json` | Sectioned decision table (per domain) | Step 2.6 |
 | `{domain}_tier3_filtered.json` | Tier 3 promotion pipeline dispositions | Step 2.6 |
 | `orphan_scan_report.json` | **Protocol-wide orphan scan results (primary section sweep + secondary page sweep + consolidation + cross-check + classification + user decisions + promoted orphan KRIs). SOA-flavored candidates dropped with reason `out_of_scope_soa`.** | **Step 3.5** |
-| `gaps_report.json` | Obligation-inventory coverage + H4 SAF heuristic result | Step 3A/3A+ |
+| `gaps_report.json` | **BLOCKING gate** — section coverage + LLM-judged obligation coverage + H4 SAF heuristic; `pass_gate` + unresolved-gap counts | Step 3A/3A+ |
 | `accuracy_report_full.json` | **100% KRI accuracy judging — 5-judge cross-model panel verdicts, consensus results, auto-corrections, user decisions, blocking gate status** | **Step 3B** |
 | `consistency_report.json` | Cross-KRI consistency check | Step 3C |
 | `verify_report.json` | Full verbatim verification results | Step 3D |
@@ -1305,7 +1306,7 @@ This copies all artifacts (extracted_kris.json, Extracted_KRIs.xlsx, raw domain 
 - `scripts/step2_6_autojudgment.py` — Step 2.6 auto-judgment (4-layer engine)
 - `scripts/autojudgment_prompts.py` — neutral CRA-framed judge prompts
 - `scripts/step3_5_orphan_scan.py` — Protocol-wide orphan scan (6-agent panel, section + page sweeps, SOA-flavored candidates dropped as `out_of_scope_soa`, blocking gate)
-- `scripts/step3a_completeness.py` — Obligation-inventory completeness check + H4 SAF heuristic
+- `scripts/step3a_completeness.py` — Completeness gate (BLOCKING): section coverage + LLM-judged obligation coverage (against the Step 2.5 inventory) + H4 SAF heuristic; honors `gaps_resolutions.json`
 - `scripts/step3b_accuracy.py` — Full KRI accuracy judging at 100% coverage (5-judge cross-model panel, blocking gate)
 - `scripts/step3c_consistency.py` — Cross-KRI consistency check
 - `scripts/step3d_verify.py` — Full verbatim pdfplumber verification (blocking gate)

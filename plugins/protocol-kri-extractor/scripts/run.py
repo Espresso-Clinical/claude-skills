@@ -29,7 +29,7 @@ Step order (from SKILL.md Phase 1 → Phase 4):
   2.5        Section obligation inventory (per domain, high-recall yardstick)
   2.6        Auto-judgment for T2 + T3-promoted KRIs (6-judge neutral panel)
   3.5        Protocol-wide orphan scan                     [BLOCKING]
-  3a         Completeness check (obligation-inventory based) + H4 SAF heuristic
+  3a         Completeness gate — section + obligation coverage         [BLOCKING]
   3b         Full KRI accuracy judging (100%, 5-judge panel) [BLOCKING]
   3c         Consistency check
   3d         Full verbatim pdfplumber verification            [BLOCKING]
@@ -85,7 +85,7 @@ STEP_CATALOG = [
     ("2.5",         "Section obligation inventory (per-domain, high-recall, no marker pre-filter)", False),
     ("2.6",         "Auto-judgment for T2 + T3-promoted KRIs (6-judge panel)",    False),
     ("3.5",         "Protocol-wide orphan scan (3 Claude + 3 Gemini)",            True),
-    ("3a",          "Completeness (obligation-inventory based) + H4 SAF heuristic", False),
+    ("3a",          "Completeness gate — section + obligation coverage + H4 SAF heuristic", True),
     ("3b",          "Full KRI accuracy judging (100%, 5-judge panel, 6 checks C1–C6)", True),
     ("3c",          "Consistency check",                                          False),
     ("3d",          "Full verbatim pdfplumber verification",                      True),
@@ -159,10 +159,14 @@ def run_step_3_5(pdf, out_dir, **kw):
 
 def run_step_3a(pdf, out_dir, **kw):
     from step3a_completeness import run_completeness_check
-    print(f"\n[ Step 3A — {STEP_DESC['3a']} ]")
+    print(f"\n[ Step 3A — {STEP_DESC['3a']} ]  (BLOCKING — section + obligation coverage)")
     manifest_path = os.path.join(out_dir, "manifest.json")
-    run_completeness_check(out_dir, manifest_path)
-    return True
+    passed = run_completeness_check(out_dir, manifest_path)
+    if not passed:
+        print("\n  ✗ Step 3A BLOCKED — unresolved coverage gaps in gaps_report.json.")
+        print("  Cover them with KRIs, re-tag sections non_substantive in the manifest,")
+        print("  or acknowledge them in gaps_resolutions.json, then re-run with: --from 3a")
+    return bool(passed)
 
 
 def run_step_3b(pdf, out_dir, **kw):
