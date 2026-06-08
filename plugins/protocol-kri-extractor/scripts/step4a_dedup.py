@@ -29,6 +29,8 @@ import os
 import re
 import sys
 
+from scope_signature import scope_conflict  # Fix #6 — never merge different-scope KRIs
+
 
 DOMAINS = ["ELIG", "SAF", "END", "OPS"]
 
@@ -175,6 +177,17 @@ def dedup(raw_by_domain):
                     ),
                 })
                 continue
+            # Scope Merge Guard (Fix #6) — never merge two KRIs that assert
+            # different time-scopes (prior vs during) or study phases. These are
+            # atomization splits, not duplicates. (No-op while grouping is by
+            # identical rule text; protective if the dedup key ever loosens.)
+            if scope_conflict(keeper.get("rule_for_llm") or "", loser.get("rule_for_llm") or ""):
+                kept_log.append({
+                    "kri_id_a": keeper["kri_id"],
+                    "kri_id_b": loser["kri_id"],
+                    "reason_kept": "Different scope (time-scope/phase) — atomization split, not a duplicate (Fix #6)",
+                })
+                continue
             cross_dropped_ids.add(id(loser))
             cross_log.append({
                 "deleted_kri_id": loser["kri_id"],
@@ -205,6 +218,14 @@ def dedup(raw_by_domain):
         )
         keeper = ranked[0]
         for loser in ranked[1:]:
+            # Scope Merge Guard (Fix #6) — keep both if scopes differ.
+            if scope_conflict(keeper.get("rule_for_llm") or "", loser.get("rule_for_llm") or ""):
+                kept_log.append({
+                    "kri_id_a": keeper["kri_id"],
+                    "kri_id_b": loser["kri_id"],
+                    "reason_kept": "Different scope (time-scope/phase) — atomization split, not a duplicate (Fix #6)",
+                })
+                continue
             intra_dropped_ids.add(id(loser))
             intra_log.append({
                 "domain": loser["_domain"],

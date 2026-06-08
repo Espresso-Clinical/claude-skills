@@ -17,6 +17,7 @@ import pdfplumber
 import anthropic
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from difflib import SequenceMatcher
+from scope_signature import scope_conflict  # Fix #6 — scope-aware clustering
 
 # Mandatory SOA-exclusion block injected into every domain extractor prompt.
 SOA_EXCLUSION_BLOCK = """
@@ -43,10 +44,30 @@ any SOA-flavored KRI that slips through. Stay strictly within your assigned
 domain's content type.
 """
 
+# Mandatory scope-atomization block injected into every domain extractor prompt (Fix #6).
+SCOPE_ATOMIZATION_BLOCK = """
+
+SCOPE ATOMIZATION — one KRI = ONE verifiable check about ONE thing at ONE scope.
+Split a single protocol sentence into MULTIPLE KRIs (one per scope) whenever it spans:
+  - TWO TIME-SCOPES — e.g. "prohibited prior to AND during the study" → 2 KRIs: a
+    pre-treatment/screening check (reads screening history) AND an on-study check
+    (reads the on-study con-med log). Capturing only the "prior to" half is a
+    coverage failure.
+  - TWO OBLIGATIONS in one sentence — e.g. "all unresolved AEs are followed for 30
+    days post-study AND study-drug-related AEs are followed until resolution" → 2 KRIs.
+  - MULTIPLE STUDY PHASES / TIME POINTS — a rule stated for both the safety run-in
+    and the randomization phase, or for several visits, when the anchor or value
+    differs → one KRI per phase / time point.
+  - MULTIPLE ANALYTES / SUB-CRITERIA — already required; keep doing it.
+Do NOT split a single-field numeric range ("BMI 18–40" is ONE check) and do NOT
+split illustrative examples ("such as A, B, C" stays ONE KRI, examples in the
+description). When in doubt about a compound sentence, emit the separate atomic KRIs.
+"""
+
 SYSTEM_PROMPT = """You are a clinical research associate (CRA) and protocol expert.
 You read clinical trial protocol sections and extract monitoring rules as KRIs
 (Key Risk Indicators) — actionable verification instructions for site monitoring.
-You always return valid JSON arrays. No markdown fences, no prose.""" + SOA_EXCLUSION_BLOCK
+You always return valid JSON arrays. No markdown fences, no prose.""" + SOA_EXCLUSION_BLOCK + SCOPE_ATOMIZATION_BLOCK
 
 KRI_SCHEMA = """Each KRI must have exactly these fields:
 {
@@ -168,7 +189,15 @@ def rules_similar(a, b, threshold=0.72):
         return False
     if max(len(a), len(b)) / max(1, min(len(a), len(b))) > 2.5:
         return False
-    return SequenceMatcher(None, a, b).ratio() >= threshold
+    if SequenceMatcher(None, a, b).ratio() < threshold:
+        return False
+    # Fix #6 — scope-aware: two text-similar rules that assert DIFFERENT
+    # time-scopes (prior vs during) or study phases (run-in vs randomization)
+    # are atomization splits, NOT duplicates — keep them in separate clusters so
+    # the merge step cannot re-collapse what scope atomization split.
+    if scope_conflict(a, b):
+        return False
+    return True
 
 
 def cluster_agent_outputs(all_agent_kris):

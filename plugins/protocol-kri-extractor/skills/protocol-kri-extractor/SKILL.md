@@ -238,6 +238,10 @@ A single protocol criterion may contain multiple sub-conditions without explicit
   Example: *"Treated with hyperbaric oxygen therapy or a cellular and/or tissue product (CTP) within 30 days"* → 2 KRIs (HBOT and CTP are distinct interventions with distinct records).
 - **Combined lab thresholds with distinct analytes** — each analyte becomes its own KRI.
   Example: *"ALT or AST >3×ULN and/or bilirubin >1.5×ULN"* → 3 KRIs (ALT, AST, bilirubin are three separate lab values).
+- **The SCOPE axis — split by time-scope, study phase, and time point (Fix #6).** A single sentence that asserts the same check across two scopes is two KRIs, because each scope reads a different data source and can fail independently. Atomize along this axis, not only by analyte/criterion:
+  - **Two time-scopes:** *"X is prohibited prior to AND during the study"* → 2 KRIs — a pre-treatment/screening check (reads screening history) AND an on-study check (reads the on-study con-med log). Capturing only the "prior to" half is a coverage failure.
+  - **Two obligations in one sentence:** *"all unresolved AEs are followed for 30 days post-study AND study-drug-related AEs are followed until resolution"* → 2 KRIs.
+  - **Two study phases / time points:** a rule stated for both the safety run-in and the randomization phase (different anchor or value) → one KRI per phase. (Visit-anchored SOA cases are out of scope here — handled by `soa-kri-extractor`.)
 
 **Do NOT split when:**
 
@@ -333,6 +337,9 @@ Dedup exists to remove true duplicates only. It does NOT exist to compress atomi
 - Essentially interchangeable `rule_for_llm` — not just "similar in topic", not just "in the same area"
 
 **NOT duplicates — MUST both be kept, NEVER delete:**
+- Two KRIs that differ only in **time-scope or study phase** (the scope axis — Fix #6)
+  - Example: "X prohibited **prior to** first treatment" and "X prohibited **during** the study" are **different** KRIs (different data source, fail independently) — never merge them. Same for a rule split across the safety run-in vs the randomization phase.
+  - This is enforced mechanically: clustering (`step2_extract.py`) and dedup (`step4a_dedup.py`) share `scope_signature.scope_conflict`, which keeps two otherwise-similar rules apart when their time-scope/phase tags conflict.
 - Two KRIs that check different atomic aspects of the same clinical area
   - Example: "LDL-C percent change at Week 14" and "LDL-C nominal change at Week 14" are **different** KRIs, not duplicates
 - Two KRIs that check different analytes in the same panel
@@ -1300,7 +1307,8 @@ This copies all artifacts (extracted_kris.json, Extracted_KRIs.xlsx, raw domain 
 - `references/kri_examples.md` — annotated KRI examples per in-scope category (ELIG, SAF, END, OPS)
 - `scripts/run.py` — single canonical pipeline entry point
 - `scripts/step1a_manifest.py` — Step 1A manifest builder: complete `section_inventory` (every TOC section + disposition, never omitted; best-fit forced for ambiguous sections) + derived `section_map` (ELIG/SAF/END/OPS) with PDF-validated contiguous page ranges
-- `scripts/step2_extract.py` — Step 2 KRI extraction (per-domain, 10-agent multi-model panel) with SOA-exclusion methodology in every prompt
+- `scripts/step2_extract.py` — Step 2 KRI extraction (per-domain, 10-agent multi-model panel) with SOA-exclusion + scope-atomization methodology in every prompt; scope-aware clustering (won't merge different-scope rules)
+- `scripts/scope_signature.py` — canonical scope-conflict detector (time-scope / study-phase tags) shared by clustering and dedup so atomization splits are never re-merged (Fix #6)
 - `scripts/step2_5_obligation_inventory.py` — Step 2.5 section obligation inventory (per-domain, high-recall, NO obligation-marker pre-filter); builds the `{domain}_obligation_inventory.json` yardstick consumed by Step 3A
 - `scripts/gemini_extract.py` — Gemini API extraction agents (multi-model competition)
 - `scripts/step2_6_autojudgment.py` — Step 2.6 auto-judgment (4-layer engine)
@@ -1311,6 +1319,6 @@ This copies all artifacts (extracted_kris.json, Extracted_KRIs.xlsx, raw domain 
 - `scripts/step3c_consistency.py` — Cross-KRI consistency check
 - `scripts/step3d_verify.py` — Full verbatim pdfplumber verification (blocking gate)
 - `scripts/step4a_assemble.py` — Assembly + Excel generation (4 in-scope domain sheets + Summary)
-- `scripts/step4a_dedup.py` — Cross-domain + intra-domain dedup, includes the SOA-flavored safety-net deletion clause
+- `scripts/step4a_dedup.py` — Cross-domain + intra-domain dedup, includes the SOA-flavored safety-net deletion clause and the scope merge guard (never merges different time-scope/phase KRIs — Fix #6)
 - `scripts/step4a_flagged_review.py` — End-of-run cross-domain flagged-review consolidator
 - `scripts/step4b_compare.py` — Optional golden-set comparison
