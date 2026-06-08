@@ -123,22 +123,17 @@ Return ONLY the JSON object.
 
 ---
 
-## Step 2 — KRI Extraction (per category, multi-model)
+## Step 2 — KRI Extraction (per category, single-model Gemini panel)
 
 **Purpose**: Extract all KRIs for one domain category using competing models.
 
 **PDF pages to read**: Pages from `manifest.section_map[CATEGORY]` entries.
 
-**Multi-model extraction process:**
+**Single-model extraction process (Item 1):**
 
-For each domain, run TWO sets of agents in parallel:
+For each domain, run **10 Gemini 3.5 Flash agents (thinking-high) in parallel** — one single-model panel, no Claude sub-agents. Independence comes from a temperature spread across the 10 agents plus the multi-turn sub-area decomposition.
 
-**Set A — Claude agents (5 agents via Claude Code subagents):**
-Standard extraction using the prompts below. Each agent runs as a Claude subagent with slightly different temperature/sampling.
-
-**Set B — Gemini agents (5 agents via `scripts/gemini_extract.py`, multi-turn with native PDF ingestion):**
-
-Gemini agents use `run_gemini_extraction_multi_turn()` — a multi-turn chat method with the PDF uploaded via Gemini's Files API. Each of the 5 parallel agents runs a sequence of focused sub-area turns defined per domain. This matches Claude agents' iteration capability (Agent tool) and was validated to reach Claude parity: ELIG 46 vs 43, SAF 37 vs 32, END 42 vs 40, OPS 75 vs 70.
+Agents use `run_gemini_extraction_multi_turn()` — a multi-turn chat method with the PDF uploaded via Gemini's Files API. Each of the 10 parallel agents runs a sequence of focused sub-area turns defined per domain, which forces exhaustive extraction within each sub-area (the prior single-shot pass self-limited).
 
 ```python
 from gemini_extract import run_gemini_extraction_multi_turn, save_gemini_results
@@ -147,14 +142,14 @@ from gemini_extract import run_gemini_extraction_multi_turn, save_gemini_results
 results = run_gemini_extraction_multi_turn(
     domain="{CATEGORY}",              # "ELIG", "SAF", "END", or "OPS"
     pdf_path="/path/to/protocol.pdf",
-    n_agents=5,
+    n_agents=10,
 )
 save_gemini_results(results, out_dir, "{CATEGORY}")
 ```
 
 **Why multi-turn with PDF (vs. the original single-shot text prompt)**:
 
-On the original `run_gemini_extraction()` method, Gemini self-limits its output on large domain prompts, producing 13-16 KRIs on OPS (75KB prompt) vs. Claude's 60-82. The root cause is NOT a token budget issue (thinking and output tokens are separate in Gemini 2.5+) — it is that Gemini makes one broad pass and decides to stop, while Claude agents iterate via their tool access.
+On the original `run_gemini_extraction()` method, Gemini self-limits its output on large domain prompts, producing 13-16 KRIs on OPS (75KB prompt) vs. 60-82 with the multi-turn method. The root cause is NOT a token budget issue (thinking and output tokens are separate in Gemini 2.5+) — a single broad pass makes the model stop early, while the multi-turn method forces iteration across sub-areas.
 
 The multi-turn method gives Gemini the same iteration capability: one chat session per agent, each with the PDF attached, stepping through the domain's sub-areas one turn at a time. The focused turns force exhaustive coverage within each sub-section instead of a single self-limiting pass.
 
@@ -167,7 +162,7 @@ The multi-turn method gives Gemini the same iteration capability: one chat sessi
 | **END** | 5 | 1) Primary + key secondary endpoints, 2) Secondary clinical efficacy endpoints, 3) Biomarker/analyte endpoints, 4) Exploratory endpoints, 5) Governance (populations, sample size, DMC, interim analysis) |
 | **OPS** | 6 | 1) IP Handling & Administration (§7), 2) Blinding & Unblinding, 3) Randomization & Study Design, 4) Procedure Methodology (§6), 5) Documentation & Regulatory, 6) Appendices |
 
-**Scope**: This applies to Phase 2 domain extraction of ELIG / SAF / END / OPS. SOA is OUT OF SCOPE for this skill (handled by `soa-kri-extractor`). Claude agents are unchanged.
+**Scope**: This applies to Phase 2 domain extraction of ELIG / SAF / END / OPS. SOA is OUT OF SCOPE for this skill (handled by `soa-kri-extractor`). All Phase-2 extraction agents are Gemini 3.5 Flash (10 per domain).
 
 **Backward compatibility**: The original `run_gemini_extraction()` (single-shot, inline text prompt, no PDF) remains available for non-Phase-2 uses — for example, Step 3B accuracy judging and Step 3.5 orphan scan, where a single-shot call is appropriate.
 
@@ -175,12 +170,12 @@ The multi-turn method gives Gemini the same iteration capability: one chat sessi
 
 **Adjudication (after both sets complete) — consensus-based, per domain:**
 
-Merge all 10 agent outputs (5 Claude + 5 Gemini). For each unique KRI found across agents, count how many agents produced it (match by semantic similarity of `rule_for_llm`):
+Merge all 10 agent outputs (10 Gemini 3.5 Flash). For each unique KRI found across agents, count how many agents produced it (match by semantic similarity of `rule_for_llm`):
 
 | Agent consensus | Action |
 |---|---|
 | **7–10 agents (T1)** found it | **Auto-approve** — goes directly into the domain's golden set |
-| **4–6 agents (T2)** found it | **Step 2.6 auto-judgment** — 6-judge neutral panel (3 Claude + 3 Gemini) pre-decides accept / reject / flag. In `--auto-approve-unanimous` mode (default ON), flagged items default to rejected at Phase 4 and surface in `flagged_review_decisions.json` (Step 4A-FlaggedReview) for end-of-run user review. In `--interactive` mode, pipeline pauses per-domain on flagged items. See the Step 2.6 section in SKILL.md for full spec. |
+| **4–6 agents (T2)** found it | **Step 2.6 auto-judgment** — 6-judge neutral panel (6 Gemini 3.5 Flash, thinking-high) pre-decides accept / reject / flag. In `--auto-approve-unanimous` mode (default ON), flagged items default to rejected at Phase 4 and surface in `flagged_review_decisions.json` (Step 4A-FlaggedReview) for end-of-run user review. In `--interactive` mode, pipeline pauses per-domain on flagged items. See the Step 2.6 section in SKILL.md for full spec. |
 | **1–3 agents (T3)** found it | **Tier 3 promotion pipeline** (T3-1 Coverage / T3-2 Verbatim / T3-2.5 Atomicity / T3-3 Panel / T3-4 Aggregate — same 6-judge panel as T2). NOT auto-deleted. Dispositions recorded in `{domain}_tier3_filtered.json`. |
 
 **Decision table format (shown to user for 4–6 agent KRIs):**
@@ -198,7 +193,7 @@ For each KRI in the 4–6 range, present:
 ```
 
 Where:
-- **Agents**: total count + breakdown (e.g., "5/10 (3C + 2G)" = 3 Claude + 2 Gemini)
+- **Agents**: total count + breakdown (e.g., "5/10" = 5 of the 10 Gemini agents)
 - **Description**: 1-2 sentence description of what this KRI monitors and why it matters
 - **Verified**: YES if the supporting quote was found verbatim on the cited protocol page via pdfplumber, NO otherwise
 - **Reference & Quote**: the `combined_ref` field (protocol reference + verbatim quote)
@@ -621,7 +616,7 @@ Apply all deletions, then re-save `extracted_kris.json` and regenerate the Excel
 | Layer 1 — Verification | Deterministic | Verbatim `supporting_quote` + non-empty `rule_for_llm` + parseable `protocol_reference`. Does NOT reject for non-binariness (Quality Rule 15 — downstream filters non-binary rules) |
 | Layer 1.5 — Atomicity | Deterministic | Rejects only genuinely-empty always-true tautologies (e.g. "Males or females"). Definitional / conditional / judgment rules are KEPT (Quality Rule 14) |
 | Layer 2 — Coverage/dedup | Deterministic | Already covered by approved T1 KRI? |
-| Layer 3 — 6-judge panel | LLM | 3 Claude + 3 Gemini vote accept / reject / conditional on each KRI |
+| Layer 3 — 6-judge panel | LLM | 6 Gemini 3.5 Flash judges (thinking-high) vote accept / reject / conditional on each KRI |
 | Layer 4 — Aggregate | Deterministic | ≥5 accept + ≤1 reject → auto_approve · ≥5 reject + ≤1 accept → auto_reject · else → flag |
 
 **Judge prompt**: neutral CRA-framed (same framing as the 10-agent extraction panel). See `scripts/autojudgment_prompts.py`.
@@ -712,7 +707,7 @@ Return JSON:
 
 **Input**: full PDF + `manifest.json` + all `raw_{DOMAIN}.json` files.
 
-**Architecture**: 6-agent cross-model panel — 3 Claude Sonnet 4 + 3 Gemini 2.5 Pro.
+**Architecture**: 6-agent panel — 6 Gemini 3.5 Flash (thinking-high), single-model with a temperature spread.
 
 **Phase 1 — Primary section sweep (section-by-section)**: For each section in `manifest.json`, each of the 6 agents independently scans the section's full text with the list of existing KRIs already citing pages in that section. Each agent returns candidate orphan rule-like statements.
 
@@ -743,9 +738,8 @@ Return JSON:
 
 **Input**: all KRIs across all `raw_{DOMAIN}.json` files + full PDF.
 
-**Architecture — 5-judge cross-model panel per KRI**:
-- C1, C2, C3 → Claude Sonnet 4 (3 independent judges)
-- G1, G2 → Gemini 2.5 Pro (2 independent judges)
+**Architecture — 5-judge Gemini panel per KRI**:
+- G1–G5 → Gemini 3.5 Flash, thinking-high (5 independent judges, temperature-spread for independence)
 
 **Per-KRI input to each judge**: KRI record + full text of cited page(s) + 1 page before and after.
 
@@ -760,8 +754,8 @@ Return JSON:
 **Per-judge verdict JSON**:
 ```json
 {
-  "judge_id": "C1",
-  "model": "claude-sonnet-4",
+  "judge_id": "G1",
+  "model": "gemini-3.5-flash",
   "kri_id": "SAF-003",
   "verdict": "CORRECT | IMPRECISE | WRONG",
   "failing_checks": ["C2", "C4"],

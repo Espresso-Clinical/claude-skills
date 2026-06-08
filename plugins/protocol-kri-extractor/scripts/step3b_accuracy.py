@@ -1,11 +1,11 @@
 """
-Step 3B — Full KRI Accuracy Judging (100% coverage, 5-judge cross-model panel, 6 checks)
+Step 3B — Full KRI Accuracy Judging (100% coverage, 5-judge Gemini panel, 6 checks)
 
 MANDATORY BLOCKING GATE. Judges EVERY KRI across all domains. Sampling is NEVER
 permitted under any circumstances. This script replaces the prior 20-KRI / 4-per-
 category sampling implementation.
 
-Panel: 3 Claude Sonnet 4 judges + 2 Gemini 2.5 Pro judges = 5 cross-model judges per KRI.
+Panel: 5 Gemini 3.5 Flash judges (thinking-high), temperature-spread for independence, per KRI.
 
 Six checks per judge:
   C1 Faithfulness         — rule_for_llm says what the protocol says
@@ -57,9 +57,11 @@ from gemini_extract import call_gemini  # noqa: E402
 
 # ─── Constants ──────────────────────────────────────────────────────────────
 CLAUDE_MODEL = "claude-sonnet-4-20250514"
-N_CLAUDE_JUDGES = 3
-N_GEMINI_JUDGES = 2
-N_PANEL = N_CLAUDE_JUDGES + N_GEMINI_JUDGES  # 5
+# Item 1: all accuracy judges are Gemini 3.5 Flash (thinking-high). Claude count
+# kept at 0 only so any external importer of the name doesn't break.
+N_CLAUDE_JUDGES = 0
+N_GEMINI_JUDGES = 5
+N_PANEL = N_GEMINI_JUDGES  # 5
 BATCH_SIZE = 8  # KRIs per LLM call when sharing the same page context
 DOMAINS = ["ELIG", "SAF", "END", "OPS"]
 
@@ -285,58 +287,39 @@ def _error_verdicts(judge_id, model, batch, reason):
     ]
 
 
-def run_claude_judge(judge_id, batch, page_context, client):
-    """Run one Claude judge on a batch. Returns (verdicts, tokens_used)."""
-    prompt = build_judge_prompt(batch, page_context)
-    try:
-        response = client.messages.create(
-            model=CLAUDE_MODEL,
-            max_tokens=4000,
-            system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        verdicts = parse_judge_response(response.content[0].text)
-        for v in verdicts:
-            v["judge_id"] = judge_id
-            v["model"] = "claude-sonnet-4"
-        tokens = response.usage.input_tokens + response.usage.output_tokens
-        return verdicts, tokens
-    except Exception as e:
-        return _error_verdicts(judge_id, "claude-sonnet-4", batch, str(e)), 0
+# Temperature spread gives independence among the same-model (Gemini) judges.
+_JUDGE_TEMPS = [0.1, 0.15, 0.2, 0.25, 0.3]
 
 
-def run_gemini_judge(judge_id, batch, page_context):
+def run_gemini_judge(judge_id, batch, page_context, temperature=0.15):
     """Run one Gemini judge on a batch. Returns (verdicts, tokens_used)."""
     prompt = build_judge_prompt(batch, page_context)
     try:
-        response_text = call_gemini(prompt, system_prompt=SYSTEM_PROMPT, temperature=0.15)
+        response_text = call_gemini(prompt, system_prompt=SYSTEM_PROMPT,
+                                    temperature=temperature, task="judge")
         verdicts = parse_judge_response(response_text)
         for v in verdicts:
             v["judge_id"] = judge_id
-            v["model"] = "gemini-2.5-pro"
+            v["model"] = "gemini-3.5-flash"
         return verdicts, 0  # Gemini token accounting via wrapper; left at 0
     except Exception as e:
-        return _error_verdicts(judge_id, "gemini-2.5-pro", batch, str(e)), 0
+        return _error_verdicts(judge_id, "gemini-3.5-flash", batch, str(e)), 0
 
 
-def run_panel_on_batch(batch, page_context, client):
-    """Run the full 5-judge panel on a batch in parallel.
+def run_panel_on_batch(batch, page_context, client=None):
+    """Run the full N_PANEL-judge panel on a batch in parallel. Single-model panel
+    (Item 1) — N_PANEL Gemini 3.5 Flash judges (thinking-high), with a temperature
+    spread for independence. `client` is accepted but ignored (call-site compat).
 
     Returns (verdicts_by_kri, tokens_used)
-      verdicts_by_kri: dict kri_id -> list of 5 verdicts (one per judge)
+      verdicts_by_kri: dict kri_id -> list of N_PANEL verdicts (one per judge)
     """
+    temps = (_JUDGE_TEMPS * ((N_PANEL // len(_JUDGE_TEMPS)) + 1))[:N_PANEL]
     verdicts_by_kri = {k["kri_id"]: [] for k in batch}
     tokens = 0
-
     with ThreadPoolExecutor(max_workers=N_PANEL) as ex:
-        futures = []
-        for i in range(N_CLAUDE_JUDGES):
-            judge_id = f"C{i + 1}"
-            futures.append(ex.submit(run_claude_judge, judge_id, batch, page_context, client))
-        for i in range(N_GEMINI_JUDGES):
-            judge_id = f"G{i + 1}"
-            futures.append(ex.submit(run_gemini_judge, judge_id, batch, page_context))
-
+        futures = [ex.submit(run_gemini_judge, f"G{i + 1}", batch, page_context, temps[i])
+                   for i in range(N_PANEL)]
         for f in as_completed(futures):
             verdicts, t = f.result()
             tokens += t
@@ -344,7 +327,6 @@ def run_panel_on_batch(batch, page_context, client):
                 kid = v.get("kri_id")
                 if kid in verdicts_by_kri:
                     verdicts_by_kri[kid].append(v)
-
     return verdicts_by_kri, tokens
 
 
@@ -548,7 +530,7 @@ def run_full_accuracy_judging(output_dir, pdf_path):
 
     print("Step 3B — Full KRI Accuracy Judging")
     print(f"  Total KRIs: {total_kris}")
-    print(f"  Panel: {N_CLAUDE_JUDGES} Claude + {N_GEMINI_JUDGES} Gemini per KRI")
+    print(f"  Panel: {N_PANEL} Gemini 3.5 Flash (thinking-high) per KRI")
     print(f"  Coverage: 100% (sampling NEVER permitted)")
     print()
 

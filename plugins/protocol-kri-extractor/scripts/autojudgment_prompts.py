@@ -3,8 +3,9 @@ Prompts for Step 2.6 auto-judgment (6-judge neutral panel).
 
 The panel replaces the manual Phase-2 decision table with an automated pre-
 decision on every T2 + T3-promoted candidate. It does NOT use personas — all
-6 judges (3 Claude + 3 Gemini) share the same CRA-framed judgment prompt to
-stay consistent with the existing 10-agent extraction panel's framing.
+6 judges (Gemini 3.5 Flash, thinking-high; run at a temperature spread for
+independence) share the same CRA-framed judgment prompt to stay consistent with
+the 10-agent extraction panel's framing.
 
 Step 2.6 decides INCLUSION in the Golden Set. It is distinct from:
   - Step 3B accuracy judging (decides CORRECTNESS, runs post-assembly on 100%)
@@ -50,7 +51,7 @@ Return valid JSON with no markdown fences, no prose, no extra text.
 """
 
 
-# ─── Neutral judge prompt — same for all 6 judges (3 Claude + 3 Gemini) ──────
+# ─── Neutral judge prompt — same for all 6 judges (6 Gemini 3.5 Flash) ───────
 JUDGE_PROMPT = """You are a clinical research associate (CRA) and protocol expert judging whether a candidate KRI (Key Risk Indicator) should be included in the Golden Set for a clinical trial protocol.
 
 You receive ONE candidate KRI at a time, along with the extraction-panel vote count and per-layer auto-judgment results. Based on:
@@ -71,9 +72,11 @@ Return JSON: {"vote": "accept"|"reject"|"conditional", "reason": "<one sentence>
 
 
 # ─── Panel structure constants (single source of truth for Step 2.6) ─────────
-N_CLAUDE_JUDGES = 3
-N_GEMINI_JUDGES = 3
-N_PANEL_TOTAL = N_CLAUDE_JUDGES + N_GEMINI_JUDGES  # 6
+# Item 1: all panel judges are Gemini 3.5 Flash (thinking-high). The Claude count
+# is retained as 0 only so any external importer of the name doesn't break.
+N_CLAUDE_JUDGES = 0
+N_GEMINI_JUDGES = 6
+N_PANEL_TOTAL = N_GEMINI_JUDGES  # 6
 
 # Aggregate decision thresholds (Layer 4):
 #   ≥5 accept AND ≤1 reject → auto_approve

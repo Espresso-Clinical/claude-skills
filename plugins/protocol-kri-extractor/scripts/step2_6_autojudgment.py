@@ -23,7 +23,7 @@ Four layers per candidate:
   Layer 1.5 — Atomicity check (deterministic: precondition-based refinement
               from SKILL.md "Atomization of compound clauses")
   Layer 2   — Coverage/dedup check (deterministic: already covered by T1?)
-  Layer 3   — 6-judge neutral panel (3 Claude + 3 Gemini, same CRA-framed
+  Layer 3   — 6-judge neutral panel (6 Gemini 3.5 Flash, thinking-high; same CRA-framed
               prompt, consistent with the 10-agent extraction panel's framing)
   Layer 4   — Aggregate decision (auto_approve / auto_reject / flag)
 
@@ -56,14 +56,10 @@ import re
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-import anthropic
-
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from gemini_extract import call_gemini  # noqa: E402
 from autojudgment_prompts import (  # noqa: E402
     JUDGE_PROMPT,
-    N_CLAUDE_JUDGES,
-    N_GEMINI_JUDGES,
     N_PANEL_TOTAL,
     L4_AUTO_APPROVE_ACCEPT_MIN,
     L4_AUTO_APPROVE_REJECT_MAX,
@@ -71,8 +67,6 @@ from autojudgment_prompts import (  # noqa: E402
     L4_AUTO_REJECT_ACCEPT_MAX,
 )
 
-
-CLAUDE_MODEL = "claude-sonnet-4-20250514"
 
 # Tier thresholds (out of 10) — MUST match SKILL.md canonical values
 TIER_T1_MIN = 7   # 7–10 agents → auto-approved, skip Step 2.6
@@ -193,25 +187,10 @@ def layer2_coverage_check(kri, tier1_kris):
 
 
 # ─── Layer 3 — 6-judge neutral panel ────────────────────────────────────────
-def _judge_claude(client, kri):
+def _judge_gemini(kri, temperature=0.1):
     prompt = _build_judge_user_prompt(kri)
     try:
-        resp = client.messages.create(
-            model=CLAUDE_MODEL,
-            max_tokens=256,
-            system=JUDGE_PROMPT,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        text = "".join(b.text for b in resp.content if getattr(b, "type", "") == "text").strip()
-        return _parse_vote(text, "claude")
-    except Exception as e:
-        return {"model": "claude", "vote": "error", "reason": str(e)[:200]}
-
-
-def _judge_gemini(kri):
-    prompt = _build_judge_user_prompt(kri)
-    try:
-        text = call_gemini(prompt, system_prompt=JUDGE_PROMPT, temperature=0.1, task="judge").strip()
+        text = call_gemini(prompt, system_prompt=JUDGE_PROMPT, temperature=temperature, task="judge").strip()
         return _parse_vote(text, "gemini")
     except Exception as e:
         return {"model": "gemini", "vote": "error", "reason": str(e)[:200]}
@@ -256,15 +235,18 @@ def _parse_vote(raw, model):
     return {"model": model, "vote": vote, "reason": str(obj.get("reason", ""))[:250]}
 
 
-def layer3_panel(kri, claude_client):
-    """Run 6 judges (3 Claude + 3 Gemini) in parallel."""
+# Temperature spread gives independence among the same-model (Gemini) judges.
+_JUDGE_TEMPS = [0.1, 0.15, 0.2, 0.25, 0.3, 0.35]
+
+
+def layer3_panel(kri, claude_client=None):
+    """Run N_PANEL_TOTAL Gemini 3.5 Flash judges (thinking-high) in parallel, with
+    a temperature spread for independence. Single-model panel (Item 1) — no Claude
+    judges. `claude_client` is accepted but ignored (call-site compatibility)."""
+    temps = (_JUDGE_TEMPS * ((N_PANEL_TOTAL // len(_JUDGE_TEMPS)) + 1))[:N_PANEL_TOTAL]
     votes = []
     with ThreadPoolExecutor(max_workers=N_PANEL_TOTAL) as ex:
-        futures = []
-        for _ in range(N_CLAUDE_JUDGES):
-            futures.append(ex.submit(_judge_claude, claude_client, kri))
-        for _ in range(N_GEMINI_JUDGES):
-            futures.append(ex.submit(_judge_gemini, kri))
+        futures = [ex.submit(_judge_gemini, kri, t) for t in temps]
         for f in as_completed(futures):
             votes.append(f.result())
     return votes
@@ -365,7 +347,6 @@ def run_autojudgment_for_domain(out_dir, domain, pdf_path=None,
     pdf_cache = _build_pdf_cache(pdf_path) if pdf_path and os.path.isfile(pdf_path) else None
 
     candidates = t2 + t3
-    claude_client = anthropic.Anthropic()
 
     per_kri_results = []
     approved_kris = list(t1)   # T1 → auto-keep
@@ -426,8 +407,8 @@ def run_autojudgment_for_domain(out_dir, domain, pdf_path=None,
                                         "reason": l2["reason"]})
             continue
 
-        # Layer 3 — 6-judge panel
-        votes = layer3_panel(kri, claude_client)
+        # Layer 3 — 6-judge panel (all Gemini 3.5 Flash, thinking-high)
+        votes = layer3_panel(kri)
         result["layer3_panel"] = votes
 
         # Layer 4 — Aggregate
@@ -495,7 +476,7 @@ def _write_artifacts(out_dir, domain, per_kri_results, approved, rejected, flagg
         "_meta": {
             "domain": domain,
             "panel_total": N_PANEL_TOTAL,
-            "panel_composition": {"claude": N_CLAUDE_JUDGES, "gemini": N_GEMINI_JUDGES},
+            "panel_composition": {"gemini": N_PANEL_TOTAL},
             "tiers": {"t1_min": TIER_T1_MIN, "t2_min": TIER_T2_MIN},
             "mode": "auto_approve_unanimous" if auto_mode else "interactive",
             "flagged_default_action": "reject_at_phase_4_review_end_of_run",
