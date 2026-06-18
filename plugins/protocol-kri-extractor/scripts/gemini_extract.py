@@ -281,7 +281,7 @@ def save_gemini_results(results: list, out_dir: str, domain: str):
 SUB_AREA_TURNS = {
     "ELIG": [
         ("Inclusion criteria",
-         "Read Section 4.1 (Inclusion Criteria) of the PDF. Extract a KRI for EVERY inclusion criterion AND every sub-criterion (e.g. a criterion with sub-parts a, b, c; a sub-part with items i-v). Use prefix ELIG-INC-NNN. Extract every criterion regardless of whether the wording is qualitative or quantitative — write `rule_for_llm` as faithfully as the protocol allows."),
+         "Read Section 4.1 (Inclusion Criteria) of the PDF. Extract a KRI for EVERY inclusion criterion AND every sub-criterion (e.g. a criterion with sub-parts a, b, c; a sub-part with items i-v). Use prefix ELIG-INC-NNN. Extract every criterion regardless of whether the wording is qualitative or quantitative — capture the criterion's exact requirement in the description, as faithfully as the protocol allows."),
         ("Exclusion criteria",
          "Read Section 4.2 (Exclusion Criteria). Extract a KRI for EVERY exclusion criterion AND every sub-criterion. Use prefix ELIG-EXC-NNN. Output only NEW KRIs not produced in turn 1."),
     ],
@@ -388,8 +388,11 @@ def run_gemini_extraction_multi_turn(
     # JSON schema reminder appended to each turn so the model keeps format consistent
     schema_hint = (
         'Return ONLY a JSON array. No markdown fences, no prose. Schema per KRI: '
-        '{"kri_id","kri_name","description","category_id","category_label",'
-        '"rule_for_llm","protocol_reference":"Section N, p.N","supporting_quote":'
+        '{"kri_id","kri_name","description":"2-3 sentences stating the verifiable '
+        'requirement WITH its exact specifics (drug names, doses, thresholds, timing '
+        'windows, analytes, population/visit scope, conditions) copied faithfully from '
+        'the protocol — NOT a Verify-that instruction","category_id","category_label",'
+        '"protocol_reference":"Section N, p.N","supporting_quote":'
         '"verbatim <=30 words (no outer double quotes)","combined_ref":'
         '"Section N, p.N — \\"quote\\"","additional_footnotes":null or footnote text,'
         '"severity":"critical|major|minor"}. Each KRI must be ATOMIC — one verifiable '
@@ -519,7 +522,7 @@ PROTOCOL TEXT:
 {pdf_text}
 
 Return ONLY a JSON array of KRI objects. Each KRI must have:
-- kri_id, kri_name, description, rule_for_llm, protocol_reference, supporting_quote, severity
+- kri_id, kri_name, description, protocol_reference, supporting_quote, severity
 Every KRI must be ATOMIC — one check per KRI. Never combine multiple items.
 """
 

@@ -103,7 +103,9 @@ Extract the complete SoA structure. Return a JSON object with this exact schema:
     "2": "verbatim footnote text"
   }},
   "cross_visit_rules": [
-    "any general rules stated in the SoA section header/text that apply across multiple visits"
+    {{"rule": "the rule text, verbatim where possible",
+      "label": "a short activity/procedure name for the rule (e.g. 'Written informed consent', 'X-ray')",
+      "applies_to_visits": ["the visit_id value(s) from visits[] this rule concerns; or the single string \"all\" only if it truly applies at every visit"]}}
   ]
 }}
 
@@ -114,8 +116,11 @@ Critical rules:
 - footnotes: include FULL verbatim text of every footnote number, not truncated
 - If a procedure row spans sub-rows (e.g. "Laboratory / Chemistry Group / Hematology"), 
   create one entry per meaningful row — do not flatten or skip sub-rows
-- cross_visit_rules: capture any timing rules, washout requirements, or sequencing 
-  rules mentioned in the SoA section text (not just the table)
+- cross_visit_rules: capture any timing rules, washout requirements, or sequencing
+  rules mentioned in the SoA section text (not just the table). For EACH, set
+  applies_to_visits to the specific visit_id(s) it concerns (e.g. informed consent →
+  the screening visit; an imaging entry-confirmation → the screening/baseline visit).
+  Use "all" ONLY when the rule genuinely applies at every visit.
 - Return ONLY the JSON object"""
 
     raw = None

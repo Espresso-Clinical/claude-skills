@@ -50,6 +50,24 @@ def scope_tags(text: str):
     return time, phase
 
 
+def kri_identity(kri: dict) -> str:
+    """Semantic identity of a KRI for clustering/dedup (Item 2 — rule_for_llm removed).
+
+    The verbatim `supporting_quote` is the most reliable anchor: two agents extracting
+    the SAME rule cite the same/overlapping quote (≈1.0 similarity), while different
+    rules (different analytes/criteria) and atomization splits get DIFFERENT quotes
+    (Quality Rule 12 — each split anchors its own shortest verbatim segment), so they
+    stay separate. Prose descriptions are NOT used as the primary key because their
+    boilerplate makes different rules look similar and the same rule look different.
+    Falls back to kri_name + description only when no quote is present (e.g. orphan
+    stubs). Shared by step2_extract (clustering) and step4a_dedup (dedup) so the key
+    lives in one place."""
+    q = (kri.get("supporting_quote") or "").strip()
+    if q:
+        return q
+    return f"{kri.get('kri_name', '')} {kri.get('description', '')}".strip()
+
+
 def scope_conflict(a: str, b: str) -> bool:
     """True if a and b assert DIFFERENT time-scopes or study-phases.
 

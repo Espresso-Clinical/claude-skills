@@ -1,6 +1,6 @@
 """
 Step 4A — Assembly + Excel Generation
-Merges raw_SOA.json, raw_ELIG.json, raw_SAF.json, raw_END.json, raw_OPS.json, raw_NDEF.json
+Merges raw_SOA.json, raw_ELIG.json, raw_SAF.json, raw_END.json, raw_OPS.json
 into a single extracted_kris.json AND generates Extracted_KRIs.xlsx. No LLM required.
 
 Must be run AFTER Step 3D (full verbatim verification) passes 100%.
@@ -40,7 +40,6 @@ CATEGORY_LABELS = {
     "SAF":  "Safety & Toxicity",
     "END":  "Endpoints & Statistics",
     "OPS":  "Operations & Compliance",
-    "NDEF": "Non-Definable",
 }
 
 # STAT and GOV are sub-categories of END — they share category_id "END"
@@ -50,10 +49,10 @@ SUBCATEGORY_MAP = {
     "GOV":  ("END", "Endpoints & Statistics"),
 }
 
-DOMAIN_ORDER = ["SOA", "ELIG", "SAF", "END", "OPS", "NDEF"]
+DOMAIN_ORDER = ["SOA", "ELIG", "SAF", "END", "OPS"]
 
 # Raw file loading order — includes STAT and GOV as separate raw files
-RAW_FILE_ORDER = ["SOA", "ELIG", "SAF", "END", "STAT", "GOV", "OPS", "NDEF"]
+RAW_FILE_ORDER = ["SOA", "ELIG", "SAF", "END", "STAT", "GOV", "OPS"]
 
 DOMAIN_COLORS = {
     "SOA":  "D9EAD3",
@@ -61,7 +60,6 @@ DOMAIN_COLORS = {
     "SAF":  "F4CCCC",
     "END":  "CFE2F3",
     "OPS":  "EAD1DC",
-    "NDEF": "FFF2CC",
 }
 
 # Excel column spec — exact, no deviations
@@ -94,7 +92,7 @@ def assemble(out_dir: str, manifest_path: str) -> str:
     for cat in RAW_FILE_ORDER:
         raw_path = os.path.join(out_dir, f"raw_{cat}.json")
         if not os.path.exists(raw_path):
-            if cat not in ("STAT", "GOV", "NDEF"):  # STAT/GOV/NDEF are optional separate files
+            if cat not in ("STAT", "GOV"):  # STAT/GOV are optional separate files
                 print(f"  {cat}: not found, skipping")
             continue
 

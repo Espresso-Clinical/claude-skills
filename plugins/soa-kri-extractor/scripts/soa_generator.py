@@ -51,6 +51,58 @@ def _visit_display(visit_id, visits_by_id):
     return visit_id
 
 
+# S3 — strip a visit-defining window from a PROCEDURE name. Applied to procedure
+# KRI names only: check-in names keep their window, and the procedure's own
+# footnote-defined timing stays in the rule body (not the name).
+_PROC_WINDOW_RE = re.compile(
+    r"\s*\([^()]*(?:\b(?:days?|weeks?)\s*\d+|±\s*\d+\s*day|\bbi-?weekly\b|\bschedule\b)[^()]*\)"
+    r"|\s*±\s*\d+\s*days?\b"
+    r"|\s*\b(?:days?|weeks?)\s*\d+\s*[-–—]\s*\d+\b",
+    re.IGNORECASE,
+)
+
+
+def _strip_visit_window(name):
+    """Remove a visit window (e.g. '(Day 12-16)', '± 1 day', 'Day 26-30') from a
+    procedure name. No-op when the name has no window."""
+    if not name:
+        return name
+    out = _PROC_WINDOW_RE.sub("", name)
+    out = re.sub(r"\s{2,}", " ", out)
+    return out.strip(" -–—")
+
+
+# S7 — §7.2 pre-IP-administration sequencing.
+_IP_ADMIN_RE = re.compile(
+    r"\b(ip administration|investigational product administ|study (?:drug|treatment) administ"
+    r"|injection|dosing|administration of (?:ip|study))\b", re.IGNORECASE)
+# Items that do NOT take a generic pre-dose clause at a treatment visit: continuous
+# capture, post-dose, the dose itself, and already-time-anchored items.
+# No outer \b...\b so prefix terms match plurals ("vital sign" → "Vital signs");
+# abbreviations keep their own boundaries.
+_PRE_DOSE_EXCLUDE_RE = re.compile(
+    r"(\bAEs?\b|\bSAEs?\b|adverse event|concomitant medication|rescue medication"
+    r"|\bNRS\b|diar|daily recording|weekly recording|pain recording|washout"
+    r"|supervision|post[-\s]?injection|post[-\s]?dose|vital sign"
+    r"|\bMRI\b|ultrasound|doppler|imaging|x[-\s]?ray|check[-\s]?in"
+    r"|ip administration|injection|study treatment|dosing)", re.IGNORECASE)
+# Safety blood labs → two-part pre-dose (draw + review before IP); others → single clause.
+_PRE_DOSE_LAB_RE = re.compile(
+    r"(biochemistr|coagulation|blood count|\bcbc\b|h[ae]matolog|chemistry|safety lab)",
+    re.IGNORECASE)
+
+
+def _treatment_visits(grid):
+    """visit_ids that have an IP-administration row in the grid (= treatment visits, §7.2)."""
+    tv = set()
+    for u in grid.get("atomic_units", []) or []:
+        if _IP_ADMIN_RE.search(u.get("procedure_atomic") or ""):
+            v = u.get("visit_atomic")
+            if v:
+                tv.add(v)
+    return tv
+
+
 def _build_protocol_reference(footnote_numbers, page_range_str, soa_label="Schedule of Activities"):
     """Construct 'Schedule of Activities, Footnote N, Footnote M, p.X-p.Y'."""
     if not footnote_numbers:
@@ -83,10 +135,20 @@ def _build_rule_for_llm_procedure(procedure, visit_display, enrichment, conditio
     timing = enrichment.get("timing_within_visit")
     conditionality = enrichment.get("conditionality") or condition
 
+    # Named drugs/agents (S2) — surfaced in SOURCE so they are not lost. The final
+    # rule wording is (re)authored downstream by the Distiller, so this is kept light.
+    named_drugs = enrichment.get("named_drugs") or []
+    drug_src = ""
+    if named_drugs:
+        label = {"prohibited": "Prohibited", "rescue": "Permitted rescue",
+                 "permitted": "Permitted"}.get(enrichment.get("drug_context"), "Named")
+        drug_src = f" {label} medications: {', '.join(named_drugs)}."
+
     # SOURCE
     source = f"The {procedure} record at the {visit_display} visit, per subject."
     if analyte_list:
         source += f" Required {list_type}: {', '.join(analyte_list)}."
+    source += drug_src
 
     # CHECK
     check = f"{procedure} was performed and dated at {visit_display} per the Schedule of Activities."
@@ -219,11 +281,18 @@ def generate(grid_path, alias_path, footnote_map_path, soa_table_path,
     kris = []
     seq = 0
 
+    # S7 — treatment visits (have an IP-administration row); each pre-dose assessment
+    # there must be performed before the injection (§7.2).
+    treatment_visits = _treatment_visits(grid)
+
     # ── Pass 1 — Atomic-grid procedure × visit KRIs (procedure-major) ─────────
     for proc in sorted(units_by_proc.keys()):
         units = sorted(units_by_proc[proc], key=_visit_sort_key)
         # Detect recognized bundle and pull components
         bundle_canon, bundle_components = get_bundle_components(proc)
+        # S3 — window-free name for all DISPLAY fields (name, description, quote,
+        # rule body). Lookups (bundle/severity/enrichment hint) keep the raw label.
+        proc_display = _strip_visit_window(proc)
 
         for unit in units:
             visit_id = unit.get("visit_atomic") or "V?"
@@ -243,7 +312,7 @@ def generate(grid_path, alias_path, footnote_map_path, soa_table_path,
 
             seq += 1
             protocol_reference = _build_protocol_reference(fn_nums, page_range_str)
-            supporting_quote = _build_supporting_quote(fragment, proc)
+            supporting_quote = _build_supporting_quote(fragment, proc_display)
             combined_ref = _build_combined_ref(protocol_reference, supporting_quote)
             additional_footnotes = None
             if fn_nums:
@@ -255,9 +324,9 @@ def generate(grid_path, alias_path, footnote_map_path, soa_table_path,
                 if parts:
                     additional_footnotes = " | ".join(parts)
 
-            rule_for_llm = _build_rule_for_llm_procedure(proc, visit_display, enrichment, condition or None)
+            rule_for_llm = _build_rule_for_llm_procedure(proc_display, visit_display, enrichment, condition or None)
 
-            description = f"Verifies that {proc} was performed at the {visit_id} visit per the Schedule of Activities table."
+            description = f"Verifies that {proc_display} was performed at the {visit_id} visit per the Schedule of Activities table."
             if enrichment.get("analyte_list"):
                 description += f" The record must include the required {enrichment['list_type']} per the protocol footnote."
             if enrichment.get("methodology"):
@@ -266,9 +335,16 @@ def generate(grid_path, alias_path, footnote_map_path, soa_table_path,
             severity = derive_severity(proc, atomic_unit=unit, ontology=ontology, kri_source="atomic_grid")
             deviation_level = derive_deviation_level(proc, kri_source="atomic_grid")
 
-            kris.append({
+            # S7 — §7.2 pre-IP sequencing: tag pre-dose assessments at treatment visits
+            # (additive). Excludes continuous / post-dose / dose-itself / already-anchored
+            # items. The Distiller authors the binary order check (needs EDC order).
+            pre_dose = (visit_id in treatment_visits) and not _PRE_DOSE_EXCLUDE_RE.search(proc)
+            if pre_dose:
+                description += " Per §7.2, this assessment must be performed prior to IP administration."
+
+            kri = {
                 "kri_id": f"SOA-{visit_id}-{seq:03d}",
-                "kri_name": f"{visit_id} - {proc}",
+                "kri_name": f"{visit_id} - {proc_display}",
                 "description": description,
                 "category_id": "SOA",
                 "category_label": CATEGORY_LABEL,
@@ -283,7 +359,12 @@ def generate(grid_path, alias_path, footnote_map_path, soa_table_path,
                 "_source": "atomic_grid",
                 "_atomic_unit_id": unit.get("unit_id"),
                 "_visit_aliases": unit.get("visit_aliases", []),
-            })
+            }
+            if pre_dose:
+                kri["pre_dose_required"] = True
+                kri["pre_dose_basis"] = "§7.2 — performed prior to IP administration at this treatment visit"
+                kri["pre_dose_kind"] = "two_part_lab" if _PRE_DOSE_LAB_RE.search(proc) else "single"
+            kris.append(kri)
 
     # ── Pass 2 — Check-in KRIs (one per atomic visit) ─────────────────────────
     atomic_visits = sorted({u.get("visit_atomic") for u in grid.get("atomic_units", []) if u.get("visit_atomic")},
@@ -351,34 +432,67 @@ def generate(grid_path, alias_path, footnote_map_path, soa_table_path,
             "_source": "checkin",
         })
 
-    # ── Pass 3 — SOA-CROSS rules from ontology.cross_visit_rules ──────────────
+    # ── Pass 3 — Cross-visit rules from ontology.cross_visit_rules ────────────
+    # S6: distribute each rule into the specific per-visit rows it applies to — no
+    # umbrella. S5 exception: a cross-rule whose content is cross-domain
+    # (washout / restriction / stopping / prior-exposure) is kept as ONE SOA-CROSS
+    # row so the cross_domain_router routes it to its home domain instead.
+    from cross_domain_router import classify_text
     cross_rules = ontology.get("cross_visit_rules") or []
-    for i, cr in enumerate(cross_rules, 1):
+    all_visit_ids = list(visits_by_id.keys())
+    cross_seq = 0
+    for cr in cross_rules:
         rule_text = cr if isinstance(cr, str) else (cr.get("rule") or cr.get("text") or "")
         rule_text = rule_text.strip()
         if not rule_text:
             continue
-        kid = f"SOA-CROSS-{i:03d}"
         quote = rule_text[:200]
-        rule = (f"SOURCE: Per subject: timing of {rule_text[:80]}... relative to the protocol-defined reference points.\n"
-                f"CHECK: {rule_text}\n"
-                f"DEVIATION: Any subject-level event/data violating the rule as stated.")
-        kris.append({
-            "kri_id": kid,
-            "kri_name": f"All visits - {quote[:60]}",
-            "description": f"Cross-visit / protocol-wide SOA rule: {rule_text[:200]}",
-            "category_id": "SOA",
-            "category_label": CATEGORY_LABEL,
-            "rule_for_llm": rule,
-            "protocol_reference": f"Schedule of Activities, {page_range_str}",
-            "supporting_quote": quote,
-            "combined_ref": f'Schedule of Activities, {page_range_str} — "{quote}"',
-            "additional_footnotes": None,
-            "severity": "major",
-            "deviation_level": "subject",
-            "agent_count": 10,
-            "_source": "cross_visit",
-        })
+
+        if classify_text(rule_text)[0]:
+            # Cross-domain → keep ONE SOA-CROSS umbrella for S5 to route out (not distributed).
+            cross_seq += 1
+            rule = (f"SOURCE: Per subject: {rule_text[:80]}... relative to the protocol-defined reference points.\n"
+                    f"CHECK: {rule_text}\n"
+                    f"DEVIATION: Any subject-level event/data violating the rule as stated.")
+            kris.append({
+                "kri_id": f"SOA-CROSS-{cross_seq:03d}",
+                "kri_name": f"All visits - {quote[:60]}",
+                "description": f"Cross-domain rule surfaced in SOA (pending route-out): {rule_text[:200]}",
+                "category_id": "SOA", "category_label": CATEGORY_LABEL,
+                "rule_for_llm": rule,
+                "protocol_reference": f"Schedule of Activities, {page_range_str}",
+                "supporting_quote": quote,
+                "combined_ref": f'Schedule of Activities, {page_range_str} — "{quote}"',
+                "additional_footnotes": None, "severity": "major",
+                "deviation_level": "subject", "agent_count": 10, "_source": "cross_visit",
+            })
+            continue
+
+        # S6 — distribute into the visit(s) it applies to (default: all atomic visits).
+        applies = cr.get("applies_to_visits") if isinstance(cr, dict) else None
+        if isinstance(applies, str):
+            applies = all_visit_ids if applies.strip().lower() == "all" else [applies]
+        targets = [v for v in (applies or []) if v in visits_by_id] or all_visit_ids
+        label = (cr.get("label") if isinstance(cr, dict) else None) or rule_text[:50]
+        label = _strip_visit_window(str(label)).strip()
+        for vid in targets:
+            vdisp = _visit_display(vid, visits_by_id)
+            seq += 1
+            rule = (f"SOURCE: Per subject: the obligation '{rule_text[:80]}...' as it applies at the {vdisp} visit.\n"
+                    f"CHECK: At {vdisp}: {rule_text}\n"
+                    f"DEVIATION: At {vdisp}, any subject-level data violating the rule as stated.")
+            kris.append({
+                "kri_id": f"SOA-{vid}-{seq:03d}",
+                "kri_name": f"{vid} - {label}",
+                "description": f"Per-visit distribution of a cross-visit SOA rule at {vdisp}: {rule_text[:160]}",
+                "category_id": "SOA", "category_label": CATEGORY_LABEL,
+                "rule_for_llm": rule,
+                "protocol_reference": f"Schedule of Activities, {page_range_str}",
+                "supporting_quote": quote,
+                "combined_ref": f'Schedule of Activities, {page_range_str} — "{quote}"',
+                "additional_footnotes": None, "severity": "major",
+                "deviation_level": "subject", "agent_count": 10, "_source": "cross_visit_distributed",
+            })
 
     # ── Pass 4 — Orphan-footnote sweep ────────────────────────────────────────
     orphan_fns = (fn_map.get("validation", {}) or {}).get("orphan_in_text") or []

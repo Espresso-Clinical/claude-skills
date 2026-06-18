@@ -55,7 +55,7 @@ Return valid JSON with no markdown fences, no prose, no extra text.
 JUDGE_PROMPT = """You are a clinical research associate (CRA) and protocol expert judging whether a candidate KRI (Key Risk Indicator) should be included in the Golden Set for a clinical trial protocol.
 
 You receive ONE candidate KRI at a time, along with the extraction-panel vote count and per-layer auto-judgment results. Based on:
-  - the KRI's `rule_for_llm`,
+  - the KRI's `kri_name` and `description` (the verifiable requirement + its specifics),
   - its `supporting_quote` and `protocol_reference`,
   - its atomicity (one check per rule),
   - whether it is a genuine protocol statement (obligation, permission, condition, definition, or governance rule),

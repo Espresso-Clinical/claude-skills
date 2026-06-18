@@ -128,3 +128,51 @@ Real examples showing the expected structure, with each field annotated. Use the
 - Footnote 23 exists in the protocol footnote text but isn't anchored to any cell in the SoA table → orphan-footnote sweep captures it.
 - The rule is concrete enough for binary verification.
 - Severity `minor` because it's a documentation clarification, not a primary safety/efficacy obligation.
+
+## Example 6 — Umbrella lab row split by footnotes (1D-ii-b)
+
+**Source:** a single SoA row labeled generically — e.g. `"Laboratory tests"` — X-marked at SCR/V1/V3/V5, whose footnotes name three distinct tests: Footnote 16 (biochemistry analytes), Footnote 12 (blood-count components), Footnote 17 (coagulation), plus shared timing Footnote 13 ("acceptable up to 3 months prior") and Footnote 14 ("may be drawn 4 days prior and reviewed before IP"). The umbrella is split into one KRI per named test, per marked visit. Two of the children shown:
+
+```json
+{
+  "kri_id": "SOA-SCR-007",
+  "kri_name": "SCR - Biochemistry Blood test",
+  "description": "Verifies that the Biochemistry blood test was performed at the SCR visit per the Schedule of Activities. The record must include all required analytes per the protocol footnote.",
+  "category_id": "SOA",
+  "category_label": "Schedule of Activities",
+  "rule_for_llm": "SOURCE: The Biochemistry blood test record at the screening (SCR) visit, per subject. Required analytes: total protein, albumin, sodium, potassium, glucose, total bilirubin, direct bilirubin, lactate dehydrogenase (LDH), creatinine, AST, ALT, γ-glutamyl transferase (GGT), alkaline phosphatase, c-reactive protein (CRP; hsCRP preferred), urea.\nCHECK: Biochemistry was performed and dated at SCR per the Schedule of Activities AND the record contains values for all required analytes; a result from up to 3 months before eligibility confirmation is acceptable; hsCRP is preferred over CRP; direct bilirubin is required only if total bilirubin is abnormal (performing both as lab standard is acceptable).\nDEVIATION: For an active subject expected at SCR, no Biochemistry record exists within the acceptable window, the record is undated, OR any required analyte is missing (direct bilirubin only when total bilirubin is abnormal).",
+  "protocol_reference": "Schedule of Activities (Run-In Phase), Footnote 13, Footnote 16, p.26",
+  "supporting_quote": "Biochemistry analyses include total protein, albumin, sodium, potassium, glucose, total and direct bilirubin (if total bilirubin is abnormal), LDH, creatinine, AST, ALT, GGT, alkaline phosphatase, CRP (hsCRP is preferred), and urea.",
+  "combined_ref": "Schedule of Activities (Run-In Phase), Footnote 13, Footnote 16, p.26 — \"Lab assessments available 3 months prior to eligibility confirmation are acceptable.\", \"Biochemistry analyses include total protein, albumin, sodium, potassium, glucose, total and direct bilirubin...\"",
+  "additional_footnotes": "Footnote 16: Biochemistry analyses include total protein, albumin, sodium, potassium, glucose, total and direct bilirubin (if total bilirubin is abnormal)..., CRP hsCRP is preferred, and urea. — Footnote 13: Lab assessments available 3 months prior to eligibility confirmation are acceptable.",
+  "severity": "major",
+  "deviation_level": "subject",
+  "agent_count": 10
+}
+```
+
+```json
+{
+  "kri_id": "SOA-V1-011",
+  "kri_name": "V1 - Coagulation test",
+  "description": "Verifies that the Coagulation test was available for the V1 (Treatment #1) visit per the Schedule of Activities. Both the blood draw and the review of results must occur prior to IP administration.",
+  "category_id": "SOA",
+  "category_label": "Schedule of Activities",
+  "rule_for_llm": "SOURCE: The Coagulation test record at the V1 (Treatment #1) visit, per subject. Required parameters: prothrombin time (PT), partial thromboplastin time (PTT).\nCHECK: Coagulation (PT, PTT) was performed and dated for V1 AND the draw occurred no more than 4 days before the visit AND the results were reviewed prior to IP administration.\nDEVIATION: For a V1 (Treatment #1) subject, no Coagulation result exists within the acceptable window, the draw was performed after IP administration, OR the results were not reviewed before IP administration.",
+  "protocol_reference": "Schedule of Activities (Run-In Phase), Footnote 14, Footnote 17, p.26",
+  "supporting_quote": "Prothrombin Time (PT), Partial Thromboplastin Time (PTT).",
+  "combined_ref": "Schedule of Activities (Run-In Phase), Footnote 14, Footnote 17, p.26 — \"Lab assessment can be done up to 4 days prior to the visit and the following results must be available and reviewed prior to the first treatment...\", \"Prothrombin Time (PT), Partial Thromboplastin Time (PTT).\"",
+  "additional_footnotes": "Footnote 17: Prothrombin Time (PT), Partial Thromboplastin Time (PTT). — Footnote 14: Lab assessment can be done up to 4 days prior to the visit and the following results must be available and reviewed prior to the first treatment.",
+  "severity": "major",
+  "deviation_level": "subject",
+  "agent_count": 10
+}
+```
+
+**Why this is right:**
+- The generic `"Laboratory tests"` row was decomposed by **footnote-driven test decomposition (1D-ii-b)** into one KRI per named test — never a single "Laboratory tests" rule.
+- Each child binds **only its own footnote slice**: Biochemistry cites FN16 (its analytes), Coagulation cites FN17 (PT/PTT) — neither cites the other's component footnote.
+- Each child **enumerates every analyte/parameter** that test measures inside `SOURCE/CHECK/DEVIATION`.
+- The **shared timing footnotes** are folded into each child's `CHECK`/`DEVIATION`: FN13 (3-months-prior) on Biochemistry, FN14 (4-day draw window + review-before-IP) on Coagulation.
+- **Carve-outs preserved**: hsCRP-preferred and conditional direct-bilirubin on Biochemistry.
+- Each child is itself a recognized panel → stays **one** KRI with components listed, never atomized per-analyte.

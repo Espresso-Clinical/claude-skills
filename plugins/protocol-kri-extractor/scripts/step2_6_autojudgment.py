@@ -58,6 +58,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from gemini_extract import call_gemini  # noqa: E402
+from scope_signature import kri_identity  # noqa: E402  (Item 2 — quote-based identity)
 from autojudgment_prompts import (  # noqa: E402
     JUDGE_PROMPT,
     N_PANEL_TOTAL,
@@ -85,16 +86,17 @@ def _normalize(s):
 
 
 def layer1_verification_gate(kri, pdf_page_cache):
-    """Verbatim anchor + binary rule + reference sanity."""
+    """Verbatim anchor + non-empty description + reference sanity."""
     quote = (kri.get("supporting_quote") or "").strip()
-    rule = (kri.get("rule_for_llm") or "").strip()
+    desc = (kri.get("description") or "").strip()
     ref = (kri.get("protocol_reference") or "").strip()
 
-    if len(rule) < 8:
-        return {"pass": False, "reason": "rule_for_llm empty or trivial"}
+    if len(desc) < 8:
+        return {"pass": False, "reason": "description empty or trivial"}
 
-    # NOTE (Fix #5): no "binary/verifiable" reject here. Per Quality Rule 15 this
-    # skill does NOT filter non-binary / definitional / conditional / investigator-
+    # NOTE (Fix #5 / Item 2): no "binary/verifiable" reject here, and rule_for_llm
+    # is no longer part of the schema. Per Quality Rule 15 this skill does NOT
+    # filter non-binary / definitional / conditional / investigator-
     # or-sponsor-decision rules — that filtering happens downstream (the distiller /
     # the user). Only genuine quality failures (empty rule, fabricated quote, bad
     # reference) reject at this gate.
@@ -133,7 +135,7 @@ def layer1_5_atomicity(kri):
 
     Returns {"pass": bool, "reason": str}.
     """
-    rule = (kri.get("rule_for_llm") or "").strip().lower()
+    rule = (kri.get("description") or "").strip().lower()
     name = (kri.get("kri_name") or "").strip().lower()
 
     # Always-true sex/gender tautology — the one genuinely-empty case we still
@@ -168,12 +170,12 @@ def layer1_5_atomicity(kri):
 # ─── Layer 2 — Coverage/dedup check (deterministic) ─────────────────────────
 def layer2_coverage_check(kri, tier1_kris):
     """Check if this candidate is already covered by an approved T1 KRI."""
-    candidate_rule = _normalize(kri.get("rule_for_llm", ""))
+    candidate_rule = _normalize(kri_identity(kri))
     if not candidate_rule:
-        return {"pass": True, "reason": "no rule to match", "covering_kri_id": None}
+        return {"pass": True, "reason": "no identity to match", "covering_kri_id": None}
 
     for t1 in tier1_kris:
-        t1_rule = _normalize(t1.get("rule_for_llm", ""))
+        t1_rule = _normalize(kri_identity(t1))
         if not t1_rule:
             continue
         if candidate_rule == t1_rule or candidate_rule in t1_rule or t1_rule in candidate_rule:
@@ -202,8 +204,7 @@ def _build_judge_user_prompt(kri):
             "kri_id": kri.get("kri_id"),
             "category_id": kri.get("category_id"),
             "kri_name": kri.get("kri_name"),
-            "description": (kri.get("description") or "")[:300],
-            "rule_for_llm": kri.get("rule_for_llm", ""),
+            "description": (kri.get("description") or "")[:400],
             "protocol_reference": kri.get("protocol_reference"),
             "supporting_quote": kri.get("supporting_quote"),
         },
@@ -521,7 +522,6 @@ def _table_row(kri):
         "category_label": kri.get("category_label"),
         "kri_name": kri.get("kri_name"),
         "description": kri.get("description"),
-        "rule_for_llm": kri.get("rule_for_llm"),
         "protocol_reference": kri.get("protocol_reference"),
         "supporting_quote": kri.get("supporting_quote"),
         "combined_ref": kri.get("combined_ref"),

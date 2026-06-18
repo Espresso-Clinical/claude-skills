@@ -12,7 +12,7 @@ PHASE 1 — Discover
   Step 4   Column boundary verification     (deterministic)
   Step 5   SoA ontology + cross-visit rules (LLM)
   Step 6   Deterministic footnote mapper    (ZERO LLM)
-  Step 7   Atomic Normalization             (deterministic + LLM refinement for low-confidence binding)
+  Step 7   Atomic Normalization             (deterministic + LLM: umbrella test split + low-confidence binding)
   Step 8   Alias / Canonical Name Map       (deterministic + LLM body-text scan)
 
 PHASE 2 — Extract
@@ -23,18 +23,71 @@ PHASE 2 — Extract
 
 PHASE 3 — Validate
   Step 13  Protocol-wide orphan scan        (6-agent LLM panel — BLOCKING)
-  Step 14  Completeness gate                (deterministic)
+  Step 14  Completeness gate                (deterministic grid-X-mark coverage + LLM ontology check)
   Step 15  Clinical heuristics H1–H10       (deterministic)
   Step 16  Full accuracy judging (5-judge × 6 checks)  (LLM — BLOCKING)
   Step 17  Consistency check                (deterministic)
   Step 18  Verbatim verification            (deterministic — BLOCKING)
 
 PHASE 4 — Assemble
-  Step 19  Assembly                         (deterministic, procedure-major order)
+  Step 19  Cross-domain route-out (S5) + Assembly (deterministic, procedure-major order)
   Step 20  Intra-SOA dedup                  (deterministic, with alias-map semantic)
-  Step 21  NDEF sweep                       (6-judge LLM panel)
-  Step 22  Flagged-review consolidated table (deterministic)
+  Step 21  Flagged-review consolidated table (deterministic)
 ```
+(Non-binary / non-verifiable rules are NOT segregated by this skill — the downstream golden-set-binary-rule-distiller's binary filter drops them.)
+
+## Step 7 — Atomic Normalization: footnote-driven test decomposition (1D-ii-b)
+
+Runs inside `atomic_normalizer.normalize()` **after** the deterministic row-label split
+(1D-ii) and **before** the per-cell unit emission. Purpose: split an *umbrella* row —
+a single procedure row whose label is a generic category (e.g. `"Laboratory tests"`,
+`"Safety labs"`, `"Blood tests"`) but whose **footnotes name ≥2 distinct tests** — into
+one procedure per named test, so each becomes its own atomic KRI per marked visit.
+
+**Gate (deterministic, zero-cost):** only consider a row when (a) the row was NOT already
+split by 1D-ii (single label), (b) the label is not a recognized bundle, and (c) the label
+matches the generic-umbrella pattern. This keeps the LLM call off the vast majority of rows.
+
+**Decision (LLM-assisted — option A):** for a gated row, pass the row label + its numbered
+footnote texts to the model, which returns the distinct named tests literally enumerated in
+those footnotes, each tagged with the footnote(s) that define it, plus the shared
+timing/acceptability footnotes that apply to all of them. If the footnotes name fewer than 2
+distinct tests (e.g. they only list the analytes of one test), the row stays whole.
+
+Prompt:
+
+```
+You are normalizing a clinical-trial Schedule of Activities row.
+
+Row label: "{proc_name}"
+Footnotes attached to this row:
+{numbered_footnote_texts}
+
+A row is an UMBRELLA when its label is a generic category (e.g. "laboratory tests",
+"safety labs", "blood tests") and its footnotes enumerate TWO OR MORE DISTINCT named
+tests/panels (e.g. a biochemistry panel, a blood count, a coagulation panel).
+
+Return STRICT JSON only:
+{
+  "is_umbrella": true|false,
+  "tests": [ {"test_name": "<distinct named test>", "component_footnotes": [<int>, ...]} ],
+  "shared_footnotes": [<int>, ...]   // timing / acceptability footnotes applying to ALL tests
+}
+
+Rules:
+- "tests" must have >=2 entries, else set is_umbrella=false and tests=[].
+- Use the test names exactly as the footnotes/label name them; do NOT invent tests.
+- A footnote that only lists the analytes of ONE test is NOT an umbrella → is_umbrella=false.
+- component_footnotes = the footnote(s) that define that test's analytes/components.
+- shared_footnotes = timing/window/acceptability notes that are not specific to one test.
+```
+
+**Effect on units:** when `is_umbrella` is true, the row's `atomic_procs` is replaced by the
+returned `test_name`s; each child carries `footnote_numbers = component_footnotes +
+shared_footnotes` so 1D-iv topic-binding and Step 9 enrichment cite only that test's slice and
+enumerate only that test's analytes. The split is recorded under `umbrella_rows_split`. When no
+API client is available the pass is skipped (row left whole) and the row is added to
+`review_queue` with reason `"possible umbrella lab row — LLM enumeration unavailable"`.
 
 ## Step 9 — SOA generator: the 3-line rule_for_llm
 
@@ -49,6 +102,12 @@ DEVIATION: For an active subject expected at <visit_display>, no <procedure> rec
 Sources of the `<items>` list:
 1. `footnote_enrichment_parser.parse_enrichment()` extracts analyte / parameter lists from the topic-bound footnote fragment (Step 7 1D-iv).
 2. `bundle_component_table.get_bundle_components()` provides component lists for recognized bundles (Vital signs → BP, HR, temp; CBC → RBC, HGB, ...).
+
+`parse_enrichment()` also captures **named drugs/agents** when a footnote frames them with a permitted / prohibited / rescue cue (e.g. `"patients may use acetaminophen and/or metamizole (dipyrone)"`). These are surfaced in the SOURCE line only (one labeled clause) so the drug names are not lost; the rule wording is left light because the Distiller re-authors it.
+
+**Pass 1 — pre-IP sequencing (S7):** at treatment visits (grid has an IP-administration row), each pre-dose procedure KRI is tagged additively with `pre_dose_required` / `pre_dose_basis` / `pre_dose_kind` (`single`, or `two_part_lab` for safety blood labs) + a description sentence. Continuous / post-dose / dose-itself / already-anchored items (AE, conmed, NRS diary, washout, post-injection vitals + supervision, the injection, check-ins, vitals, imaging) are excluded. The Distiller authors the binary order check (testable only if the EDC records order).
+
+**Pass 3 — cross-visit distribution (S6):** each ontology `cross_visit_rule` (now `{rule, label, applies_to_visits}`) is distributed into one per-visit KRI per `applies_to_visit` (or every atomic visit when `"all"`) — **no umbrella**. Exception: a cross-domain cross-rule (washout / restriction / stopping / prior-exposure, via `cross_domain_router.classify_text`) is kept as one `SOA-CROSS` row so S5 routes it to ELIG/SAF.
 
 ## Step 12 — Auto-judgment 6-judge panel prompt
 
@@ -200,32 +259,3 @@ Return JSON array of candidates:
 ```
 
 Consolidation: ≥4/6 agents → HIGH (auto-promote); 2-3/6 → USER_DECISION; 1/6 → LOW (logged).
-
-## Step 21 — NDEF sweep prompt
-
-```
-You are determining whether this KRI's rule_for_llm can produce a deterministic
-YES/NO answer when applied to subject data.
-
-KRI:
-{kri_record_json}
-
-Vote: DEFINABLE or NON_DEFINABLE.
-
-NON_DEFINABLE if the rule involves:
-  - Investigator judgment ("in the investigator's opinion", "if clinically significant")
-  - Undefined time windows ("as soon as possible", "promptly", "in a timely manner")
-  - Undefined effort / quantity ("reasonable effort", "adequate", "sufficient")
-  - Subjective thresholds
-  - Any non-binary wording
-
-DEFINABLE if the rule has:
-  - Numeric threshold or window
-  - Named data field
-  - Countable event
-  - Yes/no observable condition
-
-Return: {"vote": "DEFINABLE|NON_DEFINABLE", "reason": "≤20 words"}
-```
-
-6-agent panel (3 Claude + 3 Gemini). ≥5 NON_DEFINABLE → move to NDEF. 3-4 → user decision. 0-2 → keep in source.

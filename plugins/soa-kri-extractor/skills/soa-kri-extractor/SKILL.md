@@ -84,7 +84,14 @@ Every refinement, update, or improvement to this skill is **additive**. Never re
 - `"V3, V5, V7"` → 3 atomic visits ✓
 - `"all visits"` named multi-visit set → expand to N atomic per-visit KRIs ✓
 
-**Cross-visit rules valid for all visits** → emit N atomic per-visit KRIs (one rule per visit), never a single multi-visit KRI.
+**Cross-visit rules valid for all visits** → emit N atomic per-visit KRIs (one rule per visit), never a single multi-visit KRI. Step 9 Pass 3 implements this: it distributes each ontology `cross_visit_rule` into one KRI per `applies_to_visit` (or all atomic visits when `"all"`) and emits **no umbrella**. The one exception is a **cross-domain** cross-rule (washout / restriction / stopping / prior-exposure), kept as a single `SOA-CROSS` row so S5 routes it to ELIG/SAF instead of distributing it into SOA.
+
+**Footnote-driven test decomposition** (umbrella lab / assessment rows) — when a single row's *label* is a generic category (e.g. `"Laboratory tests"`, `"Safety labs"`, `"Clinical laboratory assessments"`, `"Blood tests"`) but its **footnotes enumerate ≥2 distinct named tests**, split into one atomic KRI per named test, per visit the row is marked — then drop the umbrella:
+- `"Laboratory tests"` + footnotes naming a chemistry panel, a blood count, and a coagulation panel → `Biochemistry`, `Complete Blood Count`, `Coagulation` (3 KRIs per marked visit) ✓
+- The split set is **footnote-driven, not fixed**: emit exactly as many KRIs as the footnotes name distinct tests. A row whose footnote merely lists the **analytes of ONE test** is NOT split (see *When NOT to split*).
+- Each child KRI binds **only its own footnote slice** — the chemistry KRI cites the chemistry-analyte footnote, not the blood-count footnote — and **enumerates every analyte / component that test measures** inside `SOURCE/CHECK/DEVIATION` (per *Footnote enrichment IN rule_for_llm*).
+- **Shared timing / acceptability footnotes** (e.g. `"results acceptable up to 3 months prior"`, `"may be drawn 4 days before the visit and reviewed prior to IP"`) are folded into the `CHECK`/`DEVIATION` of **every** child test, and **carve-outs are preserved** (e.g. `"hsCRP preferred over CRP"`, `"direct bilirubin required only if total bilirubin is abnormal"`).
+- **Structural and protocol-agnostic** — fires only when a generic row actually hides multiple named tests in its footnotes, and stays silent otherwise. A protocol that already lists the tests as **separate rows** converges on the same per-test KRIs via the ordinary row split above; both layouts yield one KRI per named test.
 
 ### When NOT to split
 
@@ -95,6 +102,7 @@ Every refinement, update, or improvement to this skill is **additive**. Never re
   Liver function tests (LFTs), Renal function tests (RFTs), Coagulation panel,
   Urinalysis, Physical examination, Full physical examination
   ```
+- **A footnote that lists the analytes of a single test does NOT trigger a split** — `"Blood count includes RBC, HGB, HCT, WBC, platelets…"` is ONE recognized panel (`Complete Blood Count`), enumerated in `rule_for_llm`, never atomized per-analyte. Footnote-driven decomposition (above) splits only when the footnotes name ≥2 **distinct tests**; each resulting child that is itself a panel then stays whole.
 - **Parentheticals** are protected — `"Manual ulcer measurements (depth and surface area)"` stays whole.
 - **Slash separators** (`/`) are NOT split — `"Assessment of clinical signs/symptoms of ulcer infection"` is one concept.
 - **Illustrative markers** force keep-whole: `such as`, `including`, `to include`, `e.g.`, `i.e.`, `for example`.
@@ -225,6 +233,7 @@ DEVIATION: For an active subject expected to attend SCR, no Blood chemistry reco
 | Sample type / volume / handling | SOURCE + DEVIATION |
 | Sub-visit timing (pre-dose, post-dose, peak) | SOURCE + CHECK |
 | Frequency-within-visit (`twice`, `every 15 min`) | CHECK + DEVIATION |
+| Named drugs / agents named under a permitted / prohibited / rescue cue (e.g. `"patients may use acetaminophen and/or metamizole"`) | SOURCE — surfaced so the drug names are captured; final rule wording is authored downstream by the Distiller |
 
 Implementation: `footnote_enrichment_parser.py` extracts these from the topic-bound footnote fragment (Step 1D-iv) and the SOA generator (Step 9) injects them into the rule.
 
@@ -249,6 +258,20 @@ DEVIATION: Fewer than 2 distinct-exam_time rows at the dosing visit, OR any requ
 ```
 
 If the protocol has a body-temp-from-AE-solicitation carve-out (e.g. footnote allowing post-dose body temp to come from a solicited-AE table), state the carve-out in SOURCE.
+
+---
+
+## CRITICAL — Pre-IP-administration sequencing (S7)
+
+At every **treatment visit** (a visit whose grid has an IP-administration row), §7.2 requires each **pre-dose assessment** to be performed **before** the injection. Presence-only rules miss order, so an assessment done *after* the dose wrongly passes. Step 9 Pass 1 tags this **additively** (`_treatment_visits` + the pre-dose classifier):
+
+- **Detect** treatment visits = visit_ids with an IP-administration row.
+- **Apply by default** to each procedure × treatment-visit KRI, **except**:
+  - *Exclude* (continuous / post-dose / the dose itself): AE/SAE capture, concomitant meds, NRS / rescue-med diaries, washout, post-injection vitals + supervision, the IP-injection row, check-ins.
+  - *Already time-anchored* (keep, don't re-tag): vital signs (own pre/post via FN5), imaging (MRI/ultrasound/X-ray).
+- **Tag** qualifying KRIs with structured fields: `pre_dose_required: true`, `pre_dose_basis: "§7.2 …"`, `pre_dose_kind: single | two_part_lab` (safety blood labs are **two-part**: draw + review before IP), plus one description sentence.
+
+The rule wording stays light — the **Distiller** authors the binary order check, which is testable **only if the EDC records order** (`evidence_expected` requests the assessment time relative to IP-administration time). *Note:* the "same assessment across arms = separate rules" point is **X1 arm-keying** (cross-cutting), not part of this tagging.
 
 ---
 
@@ -321,7 +344,7 @@ SOA-ORPHAN-FOOTNOTE-001
 
 ---
 
-## Pipeline — 18 steps
+## Pipeline — 21 steps
 
 ```
 PHASE 1 — Discover
@@ -331,7 +354,7 @@ PHASE 1 — Discover
   Step 4 — Column boundary verification
   Step 5 — SoA ontology + cross-visit rules (LLM)
   Step 6 — Deterministic footnote mapper
-  Step 7 — Atomic Normalization (1D — visit + procedure decomp, conditionality, topic-bound footnotes)
+  Step 7 — Atomic Normalization (1D — visit + procedure decomp, footnote-driven test decomposition, conditionality, topic-bound footnotes)
   Step 8 — Alias / Canonical Name Map
 
 PHASE 2 — Extract
@@ -342,7 +365,7 @@ PHASE 2 — Extract
 
 PHASE 3 — Validate
   Step 13 — Protocol-wide orphan scan (6-agent panel, BLOCKING)
-  Step 14 — Completeness gate (atomic-unit coverage)
+  Step 14 — Completeness gate (atomic-unit coverage: every grid X-mark → a rule, + LLM ontology check)
   Step 15 — Clinical heuristics H1–H10
   Step 16 — Full accuracy judging (5-judge × 6 checks, BLOCKING)
   Step 17 — Consistency check
@@ -351,9 +374,9 @@ PHASE 3 — Validate
 PHASE 4 — Assemble
   Step 19 — Assembly (JSON + Excel, procedure-major)
   Step 20 — Intra-SOA dedup (priority hierarchy + Cross-Section Merge Guard + alias-map semantic)
-  Step 21 — NDEF sweep (6-judge panel)
-  Step 22 — Flagged-review consolidated table
+  Step 21 — Flagged-review consolidated table
 ```
+> Non-binary / non-verifiable rules are NOT segregated by this skill — the downstream golden-set-binary-rule-distiller's binary filter drops them.
 
 See `references/steps.md` for detailed prompts and per-step logic.
 
@@ -403,6 +426,16 @@ See `references/steps.md` for detailed prompts and per-step logic.
 
 ---
 
+## Step 19 — Cross-domain route-out (S5)
+
+Before assembly, `cross_domain_router.py` flags SOA-surfaced rules whose content is really a **medication restriction, washout, prior-exposure, or stopping / treatment-discontinuation** rule, removes them from the SOA golden set, and writes them to **`routed_to_core.json`** with a `suggested_domain` (washout / prior-exposure → ELIG; restriction / stopping → SAF) for the Core extractor to ingest. The aim: SOA holds only visit-anchored assessments; the same restriction never lives in both SOA and SAF/ELIG.
+
+**Conservative — no LLM, default keep:**
+- Only **non-visit-anchored** KRIs are candidates (`SOA-CROSS-*`, `SOA-ORPHAN-FOOTNOTE-*`). Per-visit grid / check-in KRIs are **always kept** — including a *visit-anchored* washout like `V1 - Analgesic washout before Day 0 pain assessment` and the per-visit `Concomitant medications` **recording** activity.
+- A candidate is routed only on a clear restriction / washout / prior-exposure / stopping signal; otherwise it stays in SOA.
+
+---
+
 ## Step 20 — Intra-SOA dedup
 
 **Priority hierarchy (highest → lowest):**
@@ -411,7 +444,7 @@ See `references/steps.md` for detailed prompts and per-step logic.
 |---|---|
 | SOA-table (atomic-grid derived) | 100 — never deleted |
 | SOA-CHECKIN | 90 |
-| SOA-CROSS (cross-visit from ontology) | 80 |
+| SOA-CROSS (cross-domain cross-rule, pending S5 route-out) | 80 |
 | SOA-TEXT (narrative-only) | 70 |
 | SOA-ORPHAN-FOOTNOTE | 60 |
 
@@ -425,23 +458,6 @@ See `references/steps.md` for detailed prompts and per-step logic.
 
 ---
 
-## Step 21 — NDEF sweep
-
-KRIs whose `rule_for_llm` cannot produce a deterministic YES/NO answer are moved to NDEF:
-
-- Investigator judgment (`"in the investigator's opinion"`, `"if clinically significant"`)
-- Undefined time windows (`"as soon as possible"`, `"promptly"`, `"in a timely manner"`)
-- Undefined effort / quantity (`"reasonable effort"`, `"adequate"`, `"sufficient"`)
-- Subjective thresholds
-- Any non-binary wording
-
-**6-agent judge panel** (3 Claude + 3 Gemini) votes DEFINABLE / NON_DEFINABLE. Moved KRIs get:
-- `category_id` → `"NDEF"`, `category_label` → `"Non-Definable"`
-- `rule_for_llm` rewritten to `"NDEF — Non-verifiable: [reason]"`
-- `original_domain` field set for audit
-
----
-
 ## Quality rules (every KRI must satisfy)
 
 1. **Faithfulness:** Use exact drug names, doses, thresholds, timing windows from the protocol. Never generalize.
@@ -450,7 +466,7 @@ KRIs whose `rule_for_llm` cannot produce a deterministic YES/NO answer are moved
 4. **Visit prefix:** Every SOA `rule_for_llm` starts with visit code: `V1-`, `S2-`, `SCR-`, `D1_PRE-`, `D1_POST-`, `All visits-`.
 5. **No hallucination:** Every KRI must cite a real section + page.
 6. **Visit window check-in KRI (MANDATORY):** Every atomic visit MUST have a dedicated check-in KRI as its FIRST KRI for that visit.
-7. **Table is truth:** The SoA table (via Camelot CSV) is the single source of truth for which procedures occur at which visits. Footnotes can ADD context (enrichment) but cannot OVERRIDE the table's X marks.
+7. **Table is truth:** The SoA table (via Camelot CSV) is the single source of truth for which procedures occur at which visits. Footnotes can ADD context (enrichment) but cannot OVERRIDE the table's X marks. Step 14's deterministic `check_grid_coverage` enforces this both ways: every atomic-grid X-mark (procedure × visit) MUST map to a rule, and any X-mark with no matching rule is flagged in `gaps_report.json`.
 8. **No outer quotes in `supporting_quote`:** Never begin or end with `"`.
 9. **No duplicate page numbers:** Never produce `"p.27, p.27"` or `"Page 27, p.27"`.
 10. **No footnote number prefix in quotes:** Strip leading footnote-number markers.
@@ -458,7 +474,7 @@ KRIs whose `rule_for_llm` cannot produce a deterministic YES/NO answer are moved
 12. **Footnote associations are deterministic:** They come from `footnote_map.json` (Step 6), NEVER from LLM inference.
 13. **Quote anchoring — one obligation per quote.**
 14. **Discard traceability:** Every discarded KRI must have a non-empty `reason` field.
-15. **`rule_for_llm` must be binary and machine-readable** (non-NDEF only): unambiguous, specifies WHAT to check, WHEN, HOW, in relation to WHAT protocol requirement.
+15. **`rule_for_llm` must be binary and machine-readable**: unambiguous, specifies WHAT to check, WHEN, HOW, in relation to WHAT protocol requirement.
 16. **3-line SOURCE/CHECK/DEVIATION format is MANDATORY** for `rule_for_llm`.
 17. **Footnote details embedded in rule_for_llm** when the footnote provides parameter / analyte / measurement / methodology specifics.
 18. **Bundle component lists** in `rule_for_llm` for recognized standardized bundles.
@@ -467,6 +483,7 @@ KRIs whose `rule_for_llm` cannot produce a deterministic YES/NO answer are moved
 21. **Investigator-judgment conditionals**: When the SoA item is gated on investigator clinical judgment ("only if deemed necessary"), the judgment itself is not captured in EDC. Two valid choices: (a) bind the rule to a proxy gate that IS in EDC (e.g. "if an AE was filed at or near this visit") and encode the proxy in CHECK; OR (b) flag the rule as untestable and skip it. Do NOT write the rule as absolute — it produces noise on every subject for whom the judgment conditional didn't trigger.
 22. **Severity calibration — clinical vs data-quality omissions**: Distinguish two failure modes in DEVIATION wording. (1) Clinical assessment omission (whole record missing, procedure not performed) → assign protocol-driven severity (often `major`). (2) Data-quality omission (record present but date null, units inconsistent across visits, sub-field skipped while main field is captured) → typically `minor` — the procedure happened, the EDC entry was sloppy. When the rule could trigger on both modes, prefer two KRIs (one per severity) over a mixed-severity rule. Per-visit lab and assessment rules are the most common offenders.
 23. **Name the source table explicitly in SOURCE**: SOURCE must reference exact source-table names (e.g. `raw_vital`, `raw_solicited_ae`, `micro_culture_results`), not narrative paraphrases ("the vital-signs record", "the solicited-AE assessment"). Exact names enable downstream wiring verification and prevent the downstream LLM from guessing the source.
+24. **Procedure name = procedure only (no visit window, no other-visit clause)**: A procedure/test/assessment KRI's `kri_name` is `<visit_code> - <procedure>` only. NEVER embed the visit's allowable window (`(Day X-Y)`, `(Week N)`, `± N days`, `bi-weekly schedule`) or a clause that belongs to a different visit. The visit window lives in that visit's **check-in** KRI (whose name IS `<visit_label> - <window> - Check-in`); the procedure's own footnote-defined timing (e.g. "may be drawn up to 4 days before the visit") stays in the rule body, not the name. `soa_generator` strips any visit-window pattern deterministically (`_strip_visit_window`) from the procedure name and its other display fields (description, supporting quote, rule body), while keeping the raw label for bundle/severity/enrichment lookups. Wrong-visit clauses that survive in the rule body are out of scope for the name and are cleaned downstream by the Distiller (D6).
 
 ---
 
@@ -523,9 +540,9 @@ python scripts/run.py \
 | `consistency_report.json` | Step 17 |
 | `verify_report.json` | Step 18 |
 | `soa_golden_set.json`, `soa_golden_set.xlsx` | Step 19 |
+| `routed_to_core.json` | Step 19 (S5 cross-domain route-out) |
 | `dedup_report.json` | Step 20 |
-| `ndef_sweep_report.json`, `raw_NDEF.json` | Step 21 |
-| `flagged_review_decisions.json` | Step 22 |
+| `flagged_review_decisions.json` | Step 21 |
 
 ---
 
@@ -546,6 +563,6 @@ python scripts/run.py \
 - `scripts/step3_5_orphan_scan.py` — Step 13
 - `scripts/step3b_accuracy.py` — Step 16 (5-judge × 6 checks C1-C6)
 - `scripts/step3d_verify.py` — Step 18 (page-range aware)
+- `scripts/cross_domain_router.py` — Step 19 (S5 cross-domain route-out)
 - `scripts/step4a_dedup.py` — Step 20 (intra-SOA priority)
-- `scripts/step4a_ndef_sweep.py` — Step 21
 - `scripts/sync-to-cache.sh` — sync source → plugin cache

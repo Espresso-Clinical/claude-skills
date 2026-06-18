@@ -8,7 +8,7 @@ category sampling implementation.
 Panel: 5 Gemini 3.5 Flash judges (thinking-high), temperature-spread for independence, per KRI.
 
 Six checks per judge:
-  C1 Faithfulness         — rule_for_llm says what the protocol says
+  C1 Faithfulness         — description says what the protocol says
   C2 Specific Values      — every threshold/drug/dose/timing matches exactly
   C3 Reference Accuracy   — cited page is ABOUT the clinical topic (semantic check)
   C4 Completeness         — no critical detail the protocol specifies is missing
@@ -198,12 +198,12 @@ KRIs TO JUDGE:
 For EACH KRI, run all 6 independent checks and return a verdict.
 
 THE 6 CHECKS (every check must pass for CORRECT):
-- C1 Faithfulness: Does rule_for_llm say what the protocol says, nothing more, nothing less? No additions, no omissions, no softening, no generalization.
+- C1 Faithfulness: Does the `description` say what the protocol says, nothing more, nothing less? No additions, no omissions, no softening, no generalization.
 - C2 Specific Values: Every concrete value (threshold, drug name, dose, timing window, analyte, visit number, day count, percentage, unit) matches the protocol exactly.
 - C3 Reference Accuracy: The cited section + page is ABOUT the clinical topic of this KRI. This is a SEMANTIC check — not a substring match of the quote. If the KRI is about "LDL-C percent change at Week 14" but the cited page is about infusion reactions, C3 FAILS even if the quote text happens to appear on that page.
 - C4 Completeness: No critical detail the protocol specifies for this rule is missing.
 - C5 Scope Accuracy: Visit scope, population scope, and time-point scope all match protocol intent.
-- C6 Atomicity: The KRI encodes exactly ONE binary obligation about ONE procedure (or procedure-alias) at ONE visit (or visit-alias) with at most one condition. Compound KRIs that bundle multiple procedures (e.g., "W4 — Blood chemistry, hematology, ESR, CRP"), multiple visits (e.g., "Weeks 2–11 — Check-in within window"), or multiple obligations in one rule_for_llm FAIL C6. When you fail a KRI on C6, set "atomic_split_proposal" to a JSON array of the N atomic KRIs it should split into (each with its own rule_for_llm and the topic-relevant supporting_quote). The pipeline will atomic-split when ≥3 judges propose the same split.
+- C6 Atomicity: The KRI encodes exactly ONE binary obligation about ONE procedure (or procedure-alias) at ONE visit (or visit-alias) with at most one condition. Compound KRIs that bundle multiple procedures (e.g., "W4 — Blood chemistry, hematology, ESR, CRP"), multiple visits (e.g., "Weeks 2–11 — Check-in within window"), or multiple obligations in one KRI FAIL C6. When you fail a KRI on C6, set "atomic_split_proposal" to a JSON array of the N atomic KRIs it should split into (each with its own description and the topic-relevant supporting_quote). The pipeline will atomic-split when ≥3 judges propose the same split.
 
 VERDICTS:
 - CORRECT: all 6 checks pass
@@ -217,7 +217,7 @@ Return a JSON array, one entry per KRI in the list above, in the same order:
     "verdict": "CORRECT|IMPRECISE|WRONG",
     "failing_checks": ["C2", "C4"],
     "issue": "specific problem description, null if CORRECT",
-    "corrected_rule": "corrected rule_for_llm text, null if CORRECT",
+    "corrected_rule": "corrected description text, null if CORRECT",
     "atomic_split_proposal": null,
     "protocol_evidence": "verbatim <=25-word quote from the cited page that proves your verdict"
   }},
@@ -233,7 +233,7 @@ def build_judge_prompt(batch, page_context):
             {
                 "kri_id": k["kri_id"],
                 "kri_name": k.get("kri_name", ""),
-                "rule_for_llm": k.get("rule_for_llm", ""),
+                "description": k.get("description", ""),
                 "protocol_reference": k.get("protocol_reference", ""),
                 "supporting_quote": k.get("supporting_quote", ""),
                 "additional_footnotes": k.get("additional_footnotes", ""),
@@ -485,13 +485,13 @@ def apply_corrections_and_reverify(results, all_kris_map, page_cache, client):
             continue
 
         domain, kri_record = all_kris_map[kri_id]
-        old_rule = kri_record.get("rule_for_llm", "")
-        kri_record["rule_for_llm"] = merged
+        old_rule = kri_record.get("description", "")
+        kri_record["description"] = merged
 
         pg = parse_page_from_ref(kri_record.get("protocol_reference", ""))
         if pg is None:
             # Revert — can't re-verify without a page
-            kri_record["rule_for_llm"] = old_rule
+            kri_record["description"] = old_rule
             continue
 
         page_context = page_cache.get_with_context(pg, radius=1)
@@ -516,7 +516,7 @@ def apply_corrections_and_reverify(results, all_kris_map, page_cache, client):
             results[kri_id] = new_adj
         else:
             # Revert — correction did not verify
-            kri_record["rule_for_llm"] = old_rule
+            kri_record["description"] = old_rule
 
     return auto_correction_log
 

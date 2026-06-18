@@ -279,7 +279,7 @@ def save_gemini_results(results: list, out_dir: str, domain: str):
 SUB_AREA_TURNS = {
     "ELIG": [
         ("Inclusion criteria",
-         "Read Section 4.1 (Inclusion Criteria) of the PDF. Extract a KRI for EVERY inclusion criterion AND every sub-criterion (e.g. a criterion with sub-parts a, b, c; a sub-part with items i-v). Use prefix ELIG-INC-NNN. Extract judgment-based criteria into ELIG too — NDEF classification is handled post-assembly by Step 4A-NDEF (the NDEF Sweep), not by this extractor."),
+         "Read Section 4.1 (Inclusion Criteria) of the PDF. Extract a KRI for EVERY inclusion criterion AND every sub-criterion (e.g. a criterion with sub-parts a, b, c; a sub-part with items i-v). Use prefix ELIG-INC-NNN. Extract judgment-based criteria into ELIG too — binary/verifiability filtering is handled downstream by the distiller's binary filter, not by this extractor."),
         ("Exclusion criteria",
          "Read Section 4.2 (Exclusion Criteria). Extract a KRI for EVERY exclusion criterion AND every sub-criterion. Use prefix ELIG-EXC-NNN. Output only NEW KRIs not produced in turn 1."),
     ],
@@ -524,7 +524,7 @@ def read_pdf_pages(pdf_path: str, page_range: str) -> str:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Gemini KRI extraction")
-    parser.add_argument("--domain", required=True, help="Domain: SOA, ELIG, SAF, END, OPS (NDEF is populated post-assembly by Step 4A-NDEF, not by this extractor)")
+    parser.add_argument("--domain", required=True, help="Domain: SOA, ELIG, SAF, END, OPS")
     parser.add_argument("--pdf", required=True, help="Path to protocol PDF")
     parser.add_argument("--pages", required=True, help="Page range: '46-48' or '120,124,125'")
     parser.add_argument("--out", required=True, help="Output directory")

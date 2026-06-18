@@ -66,7 +66,7 @@ N_CLAUDE_JUDGES = 3
 N_GEMINI_JUDGES = 2
 N_PANEL = N_CLAUDE_JUDGES + N_GEMINI_JUDGES  # 5
 BATCH_SIZE = 8  # KRIs per LLM call when sharing the same page context
-DOMAINS = ["SOA", "ELIG", "SAF", "END", "OPS", "NDEF"]
+DOMAINS = ["SOA", "ELIG", "SAF", "END", "OPS"]
 
 SYSTEM_PROMPT = (
     "You are a clinical trial protocol auditor checking the accuracy of extracted KRIs. "

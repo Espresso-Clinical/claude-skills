@@ -1,7 +1,10 @@
 """
 Step 3A — Completeness Critic
 Checks extracted KRIs for completeness against the ontology.
-For SOA: every procedure × visit cell must have a KRI.
+For SOA: every procedure × visit cell must have a KRI. Two complementary checks —
+(1) check_soa_completeness: LLM, coverage vs the ontology's required_at;
+(2) check_grid_coverage (S4): deterministic, every Camelot atomic-grid X-mark
+    (procedure × visit) must map to a rule — the grid is the source of truth (Rule #7).
 For other categories: every subsection must have coverage.
 Outputs gaps.json — fed back to step2 for re-extraction of missing items.
 """
@@ -12,6 +15,60 @@ import anthropic
 SYSTEM_PROMPT = """You are a clinical trial quality control expert.
 You audit KRI extraction outputs for completeness against a reference ontology.
 You always return valid JSON. No markdown, no prose."""
+
+def _normalize_proc(name: str) -> str:
+    """Normalize a procedure name for grid↔KRI matching: lowercase, strip visit
+    windows, drop non-alphanumerics."""
+    if not name:
+        return ""
+    s = name.lower()
+    s = re.sub(r"\([^()]*(?:(?:days?|weeks?)\s*\d+|±\s*\d+\s*day|bi-?weekly|schedule)[^()]*\)", " ", s)
+    s = re.sub(r"±\s*\d+\s*days?", " ", s)
+    s = re.sub(r"\b(?:days?|weeks?)\s*\d+\s*[-–—]\s*\d+\b", " ", s)
+    return re.sub(r"[^a-z0-9]+", "", s)
+
+
+def check_grid_coverage(atomic_grid: dict, kris: list) -> dict:
+    """S4 — deterministic coverage gate: every atomic-grid X-mark (procedure × visit)
+    must map to a procedure KRI. Flags any X-mark with no matching rule.
+
+    The Camelot SoA grid is the single source of truth for which procedures occur at
+    which visits (Quality Rule #7). This is ZERO-LLM and complements the ontology-based
+    check_soa_completeness() above (which judges coverage against the LLM ontology)."""
+    units = atomic_grid.get("atomic_units", []) or []
+
+    # Covered set from KRI names of the form "{visit_id} - {procedure}".
+    covered = set()
+    for k in kris:
+        name = k.get("kri_name") or ""
+        if " - " not in name:
+            continue
+        visit, proc = name.split(" - ", 1)
+        covered.add((visit.strip().lower(), _normalize_proc(proc)))
+
+    uncovered, seen = [], set()
+    for u in units:
+        visit = (u.get("visit_atomic") or "").strip()
+        key = (visit.lower(), _normalize_proc(u.get("procedure_atomic") or ""))
+        if not key[1] or key in seen:
+            continue
+        seen.add(key)
+        if key not in covered:
+            uncovered.append({
+                "procedure": u.get("procedure_atomic"),
+                "visit": visit,
+                "unit_id": u.get("unit_id"),
+                "umbrella_origin": u.get("umbrella_origin"),
+                "severity": "CRITICAL",
+            })
+    return {
+        "check": "grid_coverage",
+        "total_grid_cells": len(seen),
+        "covered_cells": len(seen) - len(uncovered),
+        "uncovered_cells": len(uncovered),
+        "uncovered": uncovered,
+    }
+
 
 def check_soa_completeness(client, kris: list, ontology: dict, protocol_id: str) -> dict:
     """Cross-reference every procedure × visit cell against extracted KRIs."""
@@ -173,6 +230,19 @@ def run_completeness_check(output_dir: str, manifest_path: str, ontology_path: s
                 pct = result.get("coverage_pct", 0)
                 gaps = result.get("gaps", [])
                 print(f"    Coverage: {pct:.0f}% ({result.get('total_covered')}/{result.get('total_expected')})")
+                # S4 — deterministic grid-truth coverage (Camelot grid = source of truth)
+                grid_path = os.path.join(output_dir, "soa_atomic_grid.json")
+                if os.path.exists(grid_path):
+                    with open(grid_path) as gf:
+                        atomic_grid = json.load(gf)
+                    grid_cov = check_grid_coverage(atomic_grid, kris)
+                    result["grid_coverage"] = grid_cov
+                    print(f"    Grid coverage: {grid_cov['covered_cells']}/{grid_cov['total_grid_cells']} "
+                          f"X-marks; {grid_cov['uncovered_cells']} with NO matching rule")
+                    for uc in grid_cov["uncovered"][:5]:
+                        print(f"      ⚠ uncovered grid X-mark: {uc['visit']} - {str(uc['procedure'])[:50]}")
+                else:
+                    print("    ⚠ soa_atomic_grid.json not found — skipping grid-coverage check")
             else:
                 result, tokens = check_category_completeness(client, cat, kris, manifest, ontology)
                 gaps = result.get("gaps", [])
@@ -201,6 +271,18 @@ def run_completeness_check(output_dir: str, manifest_path: str, ontology_path: s
         }, f, indent=2)
     print(f"\n  Saved → {out_path}")
     print(f"  Total tokens: {total_tokens}")
+
+
+def run_completeness(output_dir: str):
+    """run.py entry point (Step 14) — resolves manifest.json / ontology.json from the
+    run dir and delegates to run_completeness_check(). (Previously run.py imported this
+    name but it was undefined, so Step 14 raised ImportError at runtime.)"""
+    return run_completeness_check(
+        output_dir,
+        os.path.join(output_dir, "manifest.json"),
+        os.path.join(output_dir, "ontology.json"),
+    )
+
 
 if __name__ == "__main__":
     import argparse

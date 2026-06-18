@@ -8,6 +8,7 @@ Parses topic-bound footnote text for:
   - timing-within-visit (e.g., "pre-dose", "within 1 hour", "post-injection")
   - conditional applicability (e.g., "if AE", "only if clinically indicated")
   - frequency (e.g., "twice daily", "every 15 minutes")
+  - named drugs / agents (e.g., "patients may use acetaminophen and/or metamizole")
 
 Returns a structured dict that the SOA generator injects into the 3-line
 SOURCE/CHECK/DEVIATION rule_for_llm.
@@ -82,6 +83,74 @@ CONDITIONAL_PATTERNS = [
 ]
 
 
+# ─── Named drugs / agents (S2) ───────────────────────────────────────────────
+# Cues that introduce a list of NAMED drugs/agents, each with the regulatory
+# context it implies. Drug names are captured generically (NO hardcoded drug
+# lexicon), so this stays protocol-agnostic. Extraction fires only when one of
+# these cues is present — which is also the materiality guard: an incidental drug
+# mention with no permitted/prohibited/rescue framing is NOT pulled into the rule.
+DRUG_CUES = [
+    (r"patients?\s+may\s+(?:use|take|receive)\b", "permitted"),
+    (r"\bmay\s+(?:use|take|receive)\b", "permitted"),
+    (r"rescue\s+medications?\s*(?:are|include)?\s*:?", "rescue"),
+    (r"permitted\s+(?:medications?|drugs?|treatments?)\s*(?:are|include)?\s*:?", "permitted"),
+    (r"allowed\s+(?:medications?|drugs?)\s*(?:are|include)?\s*:?", "permitted"),
+    (r"prohibited\s+(?:medications?|drugs?|treatments?)\s*(?:are|include)?\s*:?", "prohibited"),
+    (r"(?:must|should)\s+not\s+(?:use|take|be\s+used|receive)\b", "prohibited"),
+    (r"\bnot\s+permitted\b", "prohibited"),
+]
+
+# Generic class words that are never specific drug names — dropped from results.
+NON_DRUG_GENERIC = {
+    "pain", "medication", "medications", "drug", "drugs", "analgesic",
+    "analgesics", "analgesic medication", "analgesic medications", "therapy",
+    "therapies", "treatment", "treatments", "agent", "agents", "them", "it",
+    "long-acting analgesic medications", "long-acting analgesic medication",
+    "long acting analgesic medications", "any", "other", "such", "the",
+}
+
+
+def _split_drugs(s):
+    """Split a drug list, keeping 'a/b' synonym pairs and '(synonym)' parentheticals
+    intact while splitting on commas, ' and ', ' or ', and ' and/or '."""
+    s = re.sub(r"\s+and/or\s+", "|SEP|", s, flags=re.IGNORECASE)
+    s = re.sub(r"\s*,\s*", "|SEP|", s)
+    s = re.sub(r"\s+and\s+|\s+or\s+", "|SEP|", s, flags=re.IGNORECASE)
+    out, seen = [], set()
+    for p in s.split("|SEP|"):
+        it = p.strip().strip(".;").strip()
+        it = re.sub(r"^(?:and|or)\s+", "", it, flags=re.IGNORECASE).strip()
+        low = it.lower()
+        if not it or low in NON_DRUG_GENERIC or len(low) < 3:
+            continue
+        if low not in seen:
+            seen.add(low)
+            out.append(it)
+    return out
+
+
+def _extract_named_drugs(text):
+    """Return (drugs:list, context:str) for a footnote that names specific drugs
+    under a permitted/prohibited/rescue cue, else (None, None)."""
+    if not text:
+        return None, None
+    for cue, context in DRUG_CUES:
+        m = re.search(cue, text, re.IGNORECASE)
+        if not m:
+            continue
+        after = text[m.end():].lstrip(": ").strip()
+        # Truncate at sentence end or a trailing purpose / transition phrase.
+        cut = re.search(r"\.\s|\bfor\s+pain\b|\bfor\s+the\b|;|\bduring\b|\bup\s+to\b",
+                        after, re.IGNORECASE)
+        drugs = _split_drugs(after[:cut.start()] if cut else after)
+        if drugs:
+            # A permitted set that the footnote also frames as "rescue" → label rescue.
+            if context == "permitted" and re.search(r"\brescue\b", text, re.IGNORECASE):
+                context = "rescue"
+            return drugs, context
+    return None, None
+
+
 def _split_list(s):
     """Split a list string like 'a, b, c, and d' or 'a; b; c' into items."""
     # Drop trailing 'and' / 'or'
@@ -126,6 +195,8 @@ def parse_enrichment(footnote_text, procedure_name=None):
         "timing_within_visit": "pre-dose" | None,
         "conditionality": "if AE reported" | None,
         "frequency": "twice per visit" | None,
+        "named_drugs": [...] | None,           # specific drugs named in the footnote
+        "drug_context": "permitted"|"prohibited"|"rescue" | None,
         "raw_list_string": "<original list text>" | None,
       }
     """
@@ -197,6 +268,9 @@ def parse_enrichment(footnote_text, procedure_name=None):
     if fm:
         frequency = fm.group(1)
 
+    # Named drugs / agents (permitted / prohibited / rescue)
+    named_drugs, drug_context = _extract_named_drugs(text)
+
     return {
         "analyte_list": list_items,
         "list_type": list_type,
@@ -204,6 +278,8 @@ def parse_enrichment(footnote_text, procedure_name=None):
         "timing_within_visit": timing,
         "conditionality": conditionality,
         "frequency": frequency,
+        "named_drugs": named_drugs,
+        "drug_context": drug_context,
         "raw_list_string": raw_list,
     }
 
@@ -213,6 +289,7 @@ def _empty_enrichment():
         "analyte_list": None, "list_type": "items",
         "methodology": None, "timing_within_visit": None,
         "conditionality": None, "frequency": None,
+        "named_drugs": None, "drug_context": None,
         "raw_list_string": None,
     }
 
@@ -232,6 +309,9 @@ if __name__ == "__main__":
          "the ulcer is not healed and is amenable to culture."),
         ("Pregnancy test",
          "To be performed in females of childbearing potential only."),
+        ("Daily recording of rescue medication",
+         "Pain and associated rescue medication will be recorded daily over 7-10 days within the "
+         "Screening period. Patients may use acetaminophen and/or metamizole (dipyrone) for pain."),
     ]
     for proc, fn in samples:
         print(f"\n=== {proc} ===")
