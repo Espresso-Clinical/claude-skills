@@ -103,6 +103,7 @@ acceptance:            # open set of sub-slots — use only the ones the rule ne
   required: ...        # mandatory items
   preferred: ...       # non-mandatory but preferred
   conditional: ...     # conditional trigger / exception
+  trigger: ...         # the condition that activates the check (e.g. an optional procedure's record exists)
   pass: ...            # the plain pass condition (criteria-style rules)
   override: ...        # a documented waiver that satisfies the rule
 deviation: the violation in clinical terms, derived from applies_to + acceptance
@@ -128,6 +129,7 @@ This is the **protocol layer only** — it names NO tables, columns, codes, join
 - **Presence-only vs required-subset (labs).** A *screening* lab is usually presence-only: list its components inside `evidence_expected` as a description, give the window in `acceptance.timing`, and make the `deviation` "no result performed/dated in the window" — do NOT add a `required` item list. A *pre-treatment* lab that a footnote makes mandatory (e.g. "the following must be reviewed prior to first treatment: …") DOES get a `required` subset and a `preferred` full panel.
 - **Visit-anchored timing — name the visit, not its window.** For a procedure scheduled at a specific visit, `acceptance.timing` names the visit ("performed at the V3 visit", "for the Screening visit") and keeps the procedure's own footnote window — but never restates the visit's calendar window ("Day 12-16", "Day -29 to 0"), which is owned by the visit's dedicated check-in rule.
 - **Optional / Sponsor-gated procedures — invert, don't drop.** When a discretionary procedure's authorization is documentable, author it inverted: the deviation is *performing it without documented authorization* (omission is not a deviation) — `acceptance` carries `conditional` + `trigger` + `pass`, with an inverted `deviation`. See `references/rewrite_format.md` rule 11.
+- **Presence rules check performance, not another domain's conclusion.** An "activity performed" rule verifies the activity happened/was documented — it must not re-judge eligibility/outcome owned by ELIG/END/etc. Narrow overreaching rules to their own data; align sibling rules to the same scope. See `references/rewrite_format.md` rule 12.
 
 **Assign the `Deviation Level` column** (`subject` / `site` / `trial`). This is **assigned by the skill** for every rule — verify and overwrite any inherited value; do not assume the input is correct. See `references/deviation_levels.md` for the rubric.
 
@@ -140,6 +142,7 @@ If the user wants to verify Stage 3 landed cleanly, run a Gemini panel (default 
 - `visit-window-in-timing`: a visit-anchored procedure's `acceptance.timing` restates the visit's calendar window ("Day 12-16", "Day -29 to 0") instead of naming the visit — the window belongs to the dedicated visit check-in rule (the procedure's own footnote window is fine).
 - `bad-denominator`: `applies_to` is a data filter or wrong population (e.g. "randomized" for an eligibility criterion, "active subject") instead of a clinical denominator.
 - `restated-criterion`: `evidence_expected` restates the criterion instead of naming a clinical artifact.
+- `domain-overreach`: a presence/activity rule's `acceptance`/`deviation` re-judges a conclusion owned by another domain (e.g. asserts "all eligibility criteria met") instead of just checking the activity was performed/documented.
 - `unclear`: a slot is vague or missing data the engine needs
 - `inconsistent`: rule contradicts/drifts from the protocol text or other Golden Set columns
 - `non-deviation`: the `deviation` slot doesn't describe a real anomaly; should not be in Golden Set

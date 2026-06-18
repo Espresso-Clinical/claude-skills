@@ -19,6 +19,7 @@ acceptance:            # open set of sub-slots — use ONLY the ones the rule ne
   required: ...        # mandatory items
   preferred: ...       # non-mandatory but preferred
   conditional: ...     # conditional trigger / exception
+  trigger: ...         # the condition that activates the check (e.g. an optional procedure's record exists)
   pass: ...            # the plain pass condition (criteria-style rules)
   override: ...        # a documented waiver that satisfies the rule
 deviation: the violation in clinical terms, derived from applies_to + acceptance
@@ -83,6 +84,9 @@ When a procedure is performed only at discretion but the authorization is *docum
 - `deviation`: performed WITHOUT documented authorization
 
 `evidence_expected` must name the authorization artifact (e.g. "the Sponsor imaging-plan instruction designating the patient, or its documented absence") plus the procedure record. Distinguish from a procedure *required for a protocol-designated subset* ("applicable sites", "all main-phase patients per the imaging plan") — that stays an ordinary presence rule scoped to the designated population via `conditional`, with the normal "designated subject lacking it" deviation (rule 8). Drop only when there is neither a documentable authorization nor a protocol-defined recorded trigger to check against.
+
+### 12. Presence/activity rules check performance, not another domain's conclusion
+An "activity performed" rule (a SOA assessment, a visit procedure) verifies that the activity was **performed and documented** — it must NOT re-judge a conclusion owned by another domain. A "screening eligibility assessment performed" rule checks that the assessment happened; whether the subject actually met eligibility is ELIG's job, not this rule's. Narrow an overreaching rule to what its own data shows: the `deviation` is "the activity was not performed/documented", never "…and the criteria were not all met". Align sibling rules across phases/visits to the same corrected scope.
 
 ## Worked examples (real rules, across the five domains)
 

@@ -82,7 +82,7 @@ The Golden Set <protocol_id> has <X> rules with each `Rule for LLM` authored fro
   intent: <one-line purpose>
   applies_to: <clinical denominator — e.g. "enrolled subjects", "every SAE", "every activated site">
   evidence_expected: <the clinical artifact that must exist; never a table/column>
-  acceptance: <open set of sub-slots: timing / required / preferred / conditional / pass / override>
+  acceptance: <open set of sub-slots: timing / required / preferred / conditional / trigger / pass / override>
   deviation: <the violation in clinical terms>
   provenance: <terse section + page; NO footnote numbers>
 A `Deviation Level` column (subject / site / trial) was also assigned.
@@ -100,6 +100,7 @@ FLAG CATEGORIES
 - "visit-window-in-timing": a visit-anchored procedure's acceptance.timing restates the visit's calendar window ("Day 12-16", "Day -29 to 0") instead of naming the visit — the window belongs to the dedicated visit check-in rule (the procedure's own footnote window is fine).
 - "bad-denominator": `applies_to` is a data filter or wrong population ("randomized" for an eligibility criterion, "active subject").
 - "restated-criterion": `evidence_expected` restates the criterion instead of naming a clinical artifact.
+- "domain-overreach": a presence/activity rule's `acceptance`/`deviation` re-judges a conclusion owned by another domain (e.g. asserts "all eligibility criteria met") instead of just checking the activity was performed/documented.
 - "names-data": rule names a table/column/code/join (belongs downstream, not in the Protocol rule).
 - "unclear": a slot is vague or missing data the engine needs.
 - "inconsistent": rule contradicts/drifts from the protocol text or other Golden Set columns.
