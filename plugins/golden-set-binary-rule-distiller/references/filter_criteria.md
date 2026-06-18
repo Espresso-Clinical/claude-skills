@@ -117,5 +117,8 @@ Surface these in the audit log, do not silently fix:
 - **Truncated protocol-quote text.** Citation ends mid-word or mid-sentence.
 - **Copy-paste boilerplate descriptions.** Same Description text reused on rules that mean different things.
 - **Mis-anchored protocol references.** Citation pointing at a section that doesn't support the rule.
+- **Sentence-fragment / raw-protocol Names.** A `KRI Name` that is a truncated protocol sentence rather than a concise label.
+- **Authoring meta-notes in Descriptions.** A `Description` carrying machine leftovers (e.g. "No existing KRI covers…").
+- **Malformed / orphan provenance.** A `Protocol Reference & Quote` like "orphan-page-NN" with no real section + verbatim quote.
 
-Per the hard constraints, only fix these on explicit user authorization.
+Per the hard constraints, only fix these on explicit user authorization. The metadata-hygiene items (Names, Descriptions, provenance) are produced upstream by the **extractor** — that is where they are fixed; the distiller surfaces them in the audit log but never edits them (Constraint #1).
