@@ -69,6 +69,12 @@ The analyte list is a deviation trigger **only** where a footnote makes it manda
 ### 9. Timeliness rules — name the date proxy in `evidence_expected`
 A "within N hours/days of an event" rule is authored as a date difference. In `evidence_expected`, name the two dated artifacts the check differences (the event date and the action date). When the exact clock the protocol names isn't recorded, fall back to the closest available dates and say so plainly — never drop the rule for lack of the precise timestamp. If no clean clock exists at all, narrow the `deviation` to the part that is recorded (e.g. "the outcome was not recorded"). See filter_criteria.md "Timeliness / reporting-deadline rules".
 
+### 10. Visit-anchored procedures — `timing` is the visit, not the visit's window
+For a procedure/test/assessment scheduled at a specific visit, `acceptance.timing` states that it was performed **at/for that visit** (by its visit label — "performed at the V3 visit", "performed and dated for the Screening visit"), NOT the visit's calendar window ("Day 12-16", "Day -29 to 0"). The visit's date window is checked by its **own dedicated visit-timing rule** (the "check-in within window" rule), so a per-procedure rule must never restate it — that would duplicate the visit check and mis-attribute the window to the procedure. Keep in `timing` the procedure's **own** footnote-defined acceptability window ("may be drawn up to 4 days before the visit", "a result from up to 3 months before eligibility confirmation is acceptable") and any pre-dose sequencing clause ("prior to IP administration").
+- ✅ `timing: "performed at the V3 visit, prior to IP administration"`
+- ✅ `timing: "performed and dated for the Screening visit; a result from up to 3 months before eligibility confirmation is acceptable"`
+- ❌ `timing: "performed Day 12-16"` (that Day window is the visit's own check — it belongs to the visit check-in rule, not the procedure)
+
 ## Worked examples (real rules, across the five domains)
 
 ### SOA-008 — V1 Biochemistry (required-subset lab; the flagship)

@@ -97,6 +97,7 @@ FLAG CATEGORIES
 - "omitted-detail": a checkable detail present in the protocol/footnotes/columns is missing from the rule's slots (e.g. an acceptability window left only in the quote, an analyte dropped, an OR collapsed to AND). THE MOST IMPORTANT FLAG.
 - "jargon": meta-commentary, self-referential tags, or a footnote number ("[footnote 12]", "Footnote 14") in a slot instead of a plain clinical statement.
 - "filler": boilerplate that adds length without a check; should be trimmed.
+- "visit-window-in-timing": a visit-anchored procedure's acceptance.timing restates the visit's calendar window ("Day 12-16", "Day -29 to 0") instead of naming the visit — the window belongs to the dedicated visit check-in rule (the procedure's own footnote window is fine).
 - "bad-denominator": `applies_to` is a data filter or wrong population ("randomized" for an eligibility criterion, "active subject").
 - "restated-criterion": `evidence_expected` restates the criterion instead of naming a clinical artifact.
 - "names-data": rule names a table/column/code/join (belongs downstream, not in the Protocol rule).
