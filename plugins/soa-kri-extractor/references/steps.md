@@ -23,7 +23,7 @@ PHASE 2 — Extract
 
 PHASE 3 — Validate
   Step 13  Protocol-wide orphan scan        (6-agent LLM panel — BLOCKING)
-  Step 14  Completeness gate                (deterministic)
+  Step 14  Completeness gate                (deterministic grid-X-mark coverage + LLM ontology check)
   Step 15  Clinical heuristics H1–H10       (deterministic)
   Step 16  Full accuracy judging (5-judge × 6 checks)  (LLM — BLOCKING)
   Step 17  Consistency check                (deterministic)

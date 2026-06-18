@@ -351,7 +351,7 @@ PHASE 2 — Extract
 
 PHASE 3 — Validate
   Step 13 — Protocol-wide orphan scan (6-agent panel, BLOCKING)
-  Step 14 — Completeness gate (atomic-unit coverage)
+  Step 14 — Completeness gate (atomic-unit coverage: every grid X-mark → a rule, + LLM ontology check)
   Step 15 — Clinical heuristics H1–H10
   Step 16 — Full accuracy judging (5-judge × 6 checks, BLOCKING)
   Step 17 — Consistency check
@@ -459,7 +459,7 @@ KRIs whose `rule_for_llm` cannot produce a deterministic YES/NO answer are moved
 4. **Visit prefix:** Every SOA `rule_for_llm` starts with visit code: `V1-`, `S2-`, `SCR-`, `D1_PRE-`, `D1_POST-`, `All visits-`.
 5. **No hallucination:** Every KRI must cite a real section + page.
 6. **Visit window check-in KRI (MANDATORY):** Every atomic visit MUST have a dedicated check-in KRI as its FIRST KRI for that visit.
-7. **Table is truth:** The SoA table (via Camelot CSV) is the single source of truth for which procedures occur at which visits. Footnotes can ADD context (enrichment) but cannot OVERRIDE the table's X marks.
+7. **Table is truth:** The SoA table (via Camelot CSV) is the single source of truth for which procedures occur at which visits. Footnotes can ADD context (enrichment) but cannot OVERRIDE the table's X marks. Step 14's deterministic `check_grid_coverage` enforces this both ways: every atomic-grid X-mark (procedure × visit) MUST map to a rule, and any X-mark with no matching rule is flagged in `gaps_report.json`.
 8. **No outer quotes in `supporting_quote`:** Never begin or end with `"`.
 9. **No duplicate page numbers:** Never produce `"p.27, p.27"` or `"Page 27, p.27"`.
 10. **No footnote number prefix in quotes:** Strip leading footnote-number markers.
