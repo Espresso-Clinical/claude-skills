@@ -75,6 +75,15 @@ For a procedure/test/assessment scheduled at a specific visit, `acceptance.timin
 - ✅ `timing: "performed and dated for the Screening visit; a result from up to 3 months before eligibility confirmation is acceptable"`
 - ❌ `timing: "performed Day 12-16"` (that Day window is the visit's own check — it belongs to the visit check-in rule, not the procedure)
 
+### 11. Optional / Sponsor-gated procedures — invert the rule (deviation = performed WITHOUT authorization)
+When a procedure is performed only at discretion but the authorization is *documentable* — "per Sponsor instruction", an imaging-plan designation, a recorded per-protocol gate — do NOT author an ordinary presence rule (omission is not a deviation here) and do NOT drop it. **Invert** it: the deviation is performing it WITHOUT documented authorization. Make omission-is-not-a-deviation explicit, and use:
+- `conditional`: state plainly that the procedure is optional, has no default requirement, and that OMISSION IS NOT A DEVIATION
+- `trigger`: the procedure record exists in the subject's data
+- `pass`: EITHER it was not performed, OR it was performed AND the authorization is documented
+- `deviation`: performed WITHOUT documented authorization
+
+`evidence_expected` must name the authorization artifact (e.g. "the Sponsor imaging-plan instruction designating the patient, or its documented absence") plus the procedure record. Distinguish from a procedure *required for a protocol-designated subset* ("applicable sites", "all main-phase patients per the imaging plan") — that stays an ordinary presence rule scoped to the designated population via `conditional`, with the normal "designated subject lacking it" deviation (rule 8). Drop only when there is neither a documentable authorization nor a protocol-defined recorded trigger to check against.
+
 ## Worked examples (real rules, across the five domains)
 
 ### SOA-008 — V1 Biochemistry (required-subset lab; the flagship)
@@ -116,6 +125,20 @@ acceptance:
 deviation: "a Screening attendee with no qualifying posteroanterior knee X-ray within the acceptable window (or read locally without Sponsor approval)."
 provenance: "SoA Run-In, p.26."
 ```
+
+### SOA-203c — V6 MRI, Sponsor-instructed subset (inverted optional)
+```yaml
+intent: "An MRI at V6 is performed only for the subset designated by Sponsor instruction; performing it WITHOUT a Sponsor instruction is the deviation, omitting it is not."
+applies_to: "subjects who attended the V6 (6 months) visit in the randomized phase"
+evidence_expected: "the Sponsor imaging-plan instruction designating the patient for imaging (or its documented absence), and any V6 MRI scan record."
+acceptance:
+  conditional: "MRI at V6 is optional, performed only for the Sponsor-designated subset per the imaging plan; there is no default requirement and OMISSION IS NOT A DEVIATION"
+  trigger: "a V6 MRI scan exists in the subject's record"
+  pass: "EITHER no V6 MRI was performed, OR a V6 MRI was performed AND a Sponsor instruction designating the patient is documented"
+deviation: "a subject who underwent a V6 MRI WITHOUT a documented Sponsor instruction authorizing it."
+provenance: "SoA Randomized Phase p.31-34; §14.4.3 p.78."
+```
+The check is inverted: the deviation is unauthorized *performance*, not omission. Contrast Mode 2 (required-for-designated-subset, e.g. CRPM "for subjects at applicable sites"), authored as an ordinary scoped presence rule.
 
 ### ELIG-EXC-022 — Recent-IP exclusion (pass + override; eligibility denominator)
 ```yaml

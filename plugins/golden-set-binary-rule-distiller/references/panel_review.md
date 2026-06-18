@@ -47,7 +47,7 @@ For each candidate decide:
 - "defend": there IS a protocol-grounded way to author a binary, deviation-producing rule — a measurable anchor, a footnote that makes it testable, OR a legitimate trial-level / site-level governance KRI (interim/enrollment trigger, cohort gating, DSMB approval, randomization stratification, IRB approval, IP accountability, etc.). State the basis.
 - "confirm": after genuinely trying, there is no objective, checkable anchor — it is truly definitional / permissive / subjective.
 
-GUARDRAIL — discretionary is NOT binary: a procedure the protocol leaves to discretion ("may", "optionally", "in a subset", "per Sponsor instruction", "per investigator judgment") is NOT defensible by arguing "if performed, presence is checkable" — discretion is not a protocol-mandated trigger, so non-performance is not a deviation → "confirm". Only "defend" a conditional rule when the trigger is a protocol-DEFINED, recorded clinical condition (e.g. "if total bilirubin abnormal", "women of childbearing potential") AND the protocol REQUIRES the action when it holds.
+GUARDRAIL — discretionary is not an ordinary presence rule, but not an automatic confirm either. A discretionary procedure ("may", "optionally", "in a subset", "per Sponsor instruction", "per investigator judgment") is NOT defended as an ordinary presence rule ("if performed, presence is checkable" is not enough — non-performance is not a deviation). Decide: (1) "defend" via INVERSION when the authorization is documentable (a Sponsor instruction, imaging-plan designation, recorded gate) — the deviation is performing it WITHOUT documented authorization, omission is not a deviation; (2) "defend" as a scoped presence rule when the protocol REQUIRES it for a protocol-DEFINED, recorded subset/trigger (e.g. "if total bilirubin abnormal", "women of childbearing potential", "applicable sites"); (3) "confirm" only when there is neither a documentable authorization nor a protocol-defined recorded trigger to check against.
 
 BIAS TOWARD "defend" for genuine data-checks, but apply the guardrail above strictly. Only "confirm" if you cannot find any protocol basis to keep it.
 
@@ -133,7 +133,7 @@ After all reviewers complete:
 3. Sort by vote count, descending.
 4. Apply changes per the stage's threshold:
    - **Stage 1 (nominate):** any drop vote → candidate (keep-biased; the bar to *survive* is in Stage 2, not here).
-   - **Stage 2 (defend, drops):** cluster equivalent candidates into families and rule per family; drop on a clear ≥ 4/5 (or ≥⅔ pooled) confirm; restore if defend ≥ 3/5; **escalate every 3–2 near-tie**. Discretionary/optional procedures → confirm-drop (not defensible).
+   - **Stage 2 (defend, drops):** cluster equivalent candidates into families and rule per family; drop on a clear ≥ 4/5 (or ≥⅔ pooled) confirm; restore if defend ≥ 3/5; **escalate every 3–2 near-tie**. Discretionary/optional procedures are defended via inversion (deviation = performed without documented authorization) or as a scoped presence rule when required for a defined recorded subset; confirm-drop only pure unanchored discretion.
    - **Stage 4 (fixes):** default ≥ majority (≥ 3/5 or ≥ 2/3). Higher = more conservative; lower = noisier.
 5. Singleton flags (1 vote) are not acted on automatically. They get logged for the user's awareness, but they don't drive changes. A panel flag that conflicts with a user-approved pattern is dismissed as noise (surface it, don't auto-apply).
 
