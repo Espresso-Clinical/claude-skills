@@ -86,6 +86,13 @@ Every refinement, update, or improvement to this skill is **additive**. Never re
 
 **Cross-visit rules valid for all visits** → emit N atomic per-visit KRIs (one rule per visit), never a single multi-visit KRI.
 
+**Footnote-driven test decomposition** (umbrella lab / assessment rows) — when a single row's *label* is a generic category (e.g. `"Laboratory tests"`, `"Safety labs"`, `"Clinical laboratory assessments"`, `"Blood tests"`) but its **footnotes enumerate ≥2 distinct named tests**, split into one atomic KRI per named test, per visit the row is marked — then drop the umbrella:
+- `"Laboratory tests"` + footnotes naming a chemistry panel, a blood count, and a coagulation panel → `Biochemistry`, `Complete Blood Count`, `Coagulation` (3 KRIs per marked visit) ✓
+- The split set is **footnote-driven, not fixed**: emit exactly as many KRIs as the footnotes name distinct tests. A row whose footnote merely lists the **analytes of ONE test** is NOT split (see *When NOT to split*).
+- Each child KRI binds **only its own footnote slice** — the chemistry KRI cites the chemistry-analyte footnote, not the blood-count footnote — and **enumerates every analyte / component that test measures** inside `SOURCE/CHECK/DEVIATION` (per *Footnote enrichment IN rule_for_llm*).
+- **Shared timing / acceptability footnotes** (e.g. `"results acceptable up to 3 months prior"`, `"may be drawn 4 days before the visit and reviewed prior to IP"`) are folded into the `CHECK`/`DEVIATION` of **every** child test, and **carve-outs are preserved** (e.g. `"hsCRP preferred over CRP"`, `"direct bilirubin required only if total bilirubin is abnormal"`).
+- **Structural and protocol-agnostic** — fires only when a generic row actually hides multiple named tests in its footnotes, and stays silent otherwise. A protocol that already lists the tests as **separate rows** converges on the same per-test KRIs via the ordinary row split above; both layouts yield one KRI per named test.
+
 ### When NOT to split
 
 - **Recognized standardized bundles** stay whole (component lists go in `rule_for_llm`):
@@ -95,6 +102,7 @@ Every refinement, update, or improvement to this skill is **additive**. Never re
   Liver function tests (LFTs), Renal function tests (RFTs), Coagulation panel,
   Urinalysis, Physical examination, Full physical examination
   ```
+- **A footnote that lists the analytes of a single test does NOT trigger a split** — `"Blood count includes RBC, HGB, HCT, WBC, platelets…"` is ONE recognized panel (`Complete Blood Count`), enumerated in `rule_for_llm`, never atomized per-analyte. Footnote-driven decomposition (above) splits only when the footnotes name ≥2 **distinct tests**; each resulting child that is itself a panel then stays whole.
 - **Parentheticals** are protected — `"Manual ulcer measurements (depth and surface area)"` stays whole.
 - **Slash separators** (`/`) are NOT split — `"Assessment of clinical signs/symptoms of ulcer infection"` is one concept.
 - **Illustrative markers** force keep-whole: `such as`, `including`, `to include`, `e.g.`, `i.e.`, `for example`.
@@ -331,7 +339,7 @@ PHASE 1 — Discover
   Step 4 — Column boundary verification
   Step 5 — SoA ontology + cross-visit rules (LLM)
   Step 6 — Deterministic footnote mapper
-  Step 7 — Atomic Normalization (1D — visit + procedure decomp, conditionality, topic-bound footnotes)
+  Step 7 — Atomic Normalization (1D — visit + procedure decomp, footnote-driven test decomposition, conditionality, topic-bound footnotes)
   Step 8 — Alias / Canonical Name Map
 
 PHASE 2 — Extract

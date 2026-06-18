@@ -30,7 +30,7 @@ STEP_CATALOG = [
     ("4",          "Column boundary verification",                                   False),
     ("5",          "SoA ontology + cross-visit rules",                               False),
     ("6",          "Deterministic footnote mapper (section-header filter)",          False),
-    ("7",          "Atomic Normalization (visit + procedure decomp, topic-bound footnotes)", False),
+    ("7",          "Atomic Normalization (visit + procedure decomp, footnote-driven test decomposition, topic-bound footnotes)", False),
     ("8",          "Alias / Canonical Name Map",                                     False),
     ("9",          "Deterministic SOA generator (atomic-grid → KRIs, SOURCE/CHECK/DEVIATION)", False),
     ("10",         "SOA-text narrative LLM panel (cross-visit / methodology rules)", False),

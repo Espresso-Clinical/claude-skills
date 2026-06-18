@@ -257,6 +257,99 @@ def decompose_procedure_label(label):
     return [text], False, True
 
 
+# ─── 1D-ii-b: footnote-driven umbrella decomposition ─────────────────────────
+# A generic "umbrella" assessment/lab row hides its real sub-tests in the
+# footnotes (the label is a category, not a specific test). The pattern below is
+# only a deterministic GATE deciding whether to invoke the LLM enumeration — it is
+# never the final decision, so it stays fully protocol-agnostic.
+GENERIC_UMBRELLA_PATTERNS = re.compile(
+    r"\b("
+    r"laborator(?:y|ies)|labs?|"
+    r"(?:clinical|central|local|safety)\s+(?:laborator(?:y|ies)|labs?|bloods?)|"
+    r"laboratory\s+(?:tests?|assessments?|evaluations?|parameters?|panels?|samples?)|"
+    r"blood\s+tests?|blood\s*work|bloods?|"
+    r"safety\s+bloods?"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def is_generic_umbrella_label(label):
+    """Deterministic gate for 1D-ii-b: does this row label look like a generic
+    category that may hide ≥2 named tests in its footnotes? Recognized panels
+    (CBC, CMP, Vital signs, …) are specific, never umbrellas. Returns True only to
+    decide whether to call the LLM enumeration — not the final split decision."""
+    if not label:
+        return False
+    if _is_recognized_bundle(label):
+        return False
+    return bool(GENERIC_UMBRELLA_PATTERNS.search(label))
+
+
+def enumerate_footnote_named_tests(proc_name, fn_nums, fn_texts, client=None):
+    """1D-ii-b (LLM-assisted, option A): for a gated umbrella row, return the
+    distinct named tests its footnotes enumerate, each tagged with its defining
+    footnote(s), plus the shared timing/acceptability footnotes.
+
+    Returns a dict {"is_umbrella": bool, "tests": [{"test_name", "component_footnotes"}],
+    "shared_footnotes": [..]} or None when no LLM is available. is_umbrella is True
+    only when ≥2 distinct tests are named; a footnote that merely lists the analytes
+    of ONE test yields is_umbrella=False (row stays whole)."""
+    fn_nums = [n for n in (fn_nums or []) if fn_texts.get(str(n))]
+    if len(fn_nums) < 1:
+        return {"is_umbrella": False, "tests": [], "shared_footnotes": []}
+    if not HAS_ANTHROPIC:
+        return None
+    if client is None:
+        try:
+            client = anthropic.Anthropic()
+        except Exception as e:
+            print(f"  ⚠ atomic_normalizer.umbrella: client init failed ({e}) — skipping.")
+            return None
+
+    numbered = "\n".join(f"Footnote {n}: {fn_texts.get(str(n), '')}" for n in fn_nums)
+    prompt = (
+        "You are normalizing a clinical-trial Schedule of Activities row.\n\n"
+        f'Row label: "{proc_name}"\n'
+        f"Footnotes attached to this row:\n{numbered}\n\n"
+        "A row is an UMBRELLA when its label is a generic category (e.g. \"laboratory tests\", "
+        "\"safety labs\", \"blood tests\") and its footnotes enumerate TWO OR MORE DISTINCT named "
+        "tests/panels (e.g. a biochemistry panel, a blood count, a coagulation panel).\n\n"
+        "Return STRICT JSON only, no preamble:\n"
+        '{"is_umbrella": true|false, '
+        '"tests": [{"test_name": "<distinct named test>", "component_footnotes": [<int>]}], '
+        '"shared_footnotes": [<int>]}\n\n'
+        "Rules:\n"
+        "- tests must have >=2 entries, else is_umbrella=false and tests=[].\n"
+        "- Use test names exactly as the footnotes/label name them; do NOT invent tests.\n"
+        "- A footnote that only lists the analytes of ONE test is NOT an umbrella.\n"
+        "- component_footnotes = the footnote(s) defining that test's analytes/components.\n"
+        "- shared_footnotes = timing/window/acceptability notes not specific to one test."
+    )
+    try:
+        response = client.messages.create(
+            model=CLAUDE_MODEL,
+            max_tokens=800,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = (response.content[0].text or "").strip()
+        m = re.search(r"\{.*\}", text, re.DOTALL)
+        if not m:
+            return {"is_umbrella": False, "tests": [], "shared_footnotes": []}
+        data = json.loads(m.group(0))
+        tests = [t for t in data.get("tests", []) if t.get("test_name")]
+        if not data.get("is_umbrella") or len(tests) < 2:
+            return {"is_umbrella": False, "tests": [], "shared_footnotes": []}
+        return {
+            "is_umbrella": True,
+            "tests": tests,
+            "shared_footnotes": data.get("shared_footnotes", []) or [],
+        }
+    except Exception as e:
+        print(f"  ⚠ atomic_normalizer.umbrella: enumeration failed for '{proc_name}': {e}")
+        return {"is_umbrella": False, "tests": [], "shared_footnotes": []}
+
+
 def extract_condition(footnote_text):
     """1D-iii: extract structured conditionality from footnote text."""
     if not footnote_text:
@@ -389,8 +482,11 @@ def refine_low_confidence_bindings(grid, footnote_map, client=None):
     return grid
 
 
-def normalize(soa_table, footnote_map):
-    """Run the four 1D sub-passes against the loaded JSON inputs."""
+def normalize(soa_table, footnote_map, client=None):
+    """Run the 1D sub-passes against the loaded JSON inputs.
+
+    `client` (optional) enables the LLM-assisted 1D-ii-b umbrella-row split; when
+    None that pass is skipped and gated rows are flagged to the review queue."""
     visits = soa_table.get("visits", [])
     procedures = soa_table.get("procedures", [])
     fn_texts = footnote_map.get("footnote_texts", {})
@@ -411,6 +507,7 @@ def normalize(soa_table, footnote_map):
 
     atomic_units = []
     compound_rows_split = []
+    umbrella_rows_split = []
     review_queue = []
     unit_seq = 0
 
@@ -423,6 +520,35 @@ def normalize(soa_table, footnote_map):
             review_queue.append({"row_label": proc_name, "reason": "ambiguous compound — review required"})
 
         cell_fn = proc.get("cell_footnotes", {}) or {}
+
+        # 1D-ii-b: footnote-driven umbrella decomposition. Gate deterministically,
+        # then ask the LLM to enumerate the distinct named tests the footnotes carry.
+        # umbrella_child_fn maps each child test → its own footnote numbers (component
+        # + shared timing), so each child cites and enumerates only its own slice.
+        umbrella_child_fn = None
+        if (not p_compound) and len(atomic_procs) == 1 and is_generic_umbrella_label(proc_name):
+            if client is None:
+                # LLM disabled (--no-umbrella-split) or unavailable: never call out,
+                # keep the row whole and flag it so a human can split it.
+                review_queue.append({
+                    "row_label": proc_name,
+                    "reason": "possible umbrella lab row — LLM enumeration disabled/unavailable",
+                })
+            else:
+                row_fn_nums = list(dict.fromkeys(
+                    (proc_fn.get(proc_name, {}).get("procedure_level", []) or [])
+                    + [n for cell in cell_fn.values() for n in (cell or [])]
+                ))
+                enum = enumerate_footnote_named_tests(proc_name, row_fn_nums, fn_texts, client)
+                if enum and enum.get("is_umbrella") and len(enum.get("tests", [])) >= 2:
+                    shared = enum.get("shared_footnotes", []) or []
+                    umbrella_child_fn = {
+                        t["test_name"]: list(dict.fromkeys((t.get("component_footnotes", []) or []) + shared))
+                        for t in enum["tests"]
+                    }
+                    atomic_procs = list(umbrella_child_fn.keys())
+                    umbrella_rows_split.append({"original_label": proc_name, "split_into": atomic_procs})
+
         # Set of canonical visit IDs known from the table — used to normalize
         # split components like '12' → 'V12' when the canonical form exists.
         known_vids = {v.get("visit_id") for v in visits if v.get("visit_id")}
@@ -454,9 +580,19 @@ def normalize(soa_table, footnote_map):
                 condition = extract_condition(cell_fn_text_concat) if cell_fn_text_concat else None
 
                 for atomic_proc in atomic_procs:
+                    # Umbrella children carry their own footnote slice (component +
+                    # shared timing); all other units use the cell-level footnotes.
+                    if umbrella_child_fn is not None:
+                        eff_fn = umbrella_child_fn.get(atomic_proc, effective_fn)
+                        fn_text_concat = " ".join(fn_texts.get(str(n), "") for n in eff_fn).strip()
+                        cond = extract_condition(fn_text_concat) if fn_text_concat else None
+                    else:
+                        eff_fn = effective_fn
+                        fn_text_concat = cell_fn_text_concat
+                        cond = condition
                     for atomic_visit in atomic_visits:
-                        if cell_fn_text_concat:
-                            binding = bind_footnote_fragment(cell_fn_text_concat, atomic_proc, atomic_visit)
+                        if fn_text_concat:
+                            binding = bind_footnote_fragment(fn_text_concat, atomic_proc, atomic_visit)
                         else:
                             binding = {"fragment": "", "confidence": "none"}
                         unit_seq += 1
@@ -464,23 +600,26 @@ def normalize(soa_table, footnote_map):
                             "unit_id": f"SOA-ATOM-{unit_seq:04d}",
                             "procedure_atomic": atomic_proc,
                             "procedure_compound_origin": proc_name if p_compound else None,
+                            "umbrella_origin": proc_name if umbrella_child_fn is not None else None,
                             "visit_atomic": atomic_visit,
                             "visit_aliases": [],
                             "visit_compound_origin": vid if vid != atomic_visit else None,
-                            "footnote_numbers": effective_fn,
+                            "footnote_numbers": eff_fn,
                             "footnote_fragment": binding["fragment"],
                             "footnote_binding_confidence": binding["confidence"],
-                            "condition": condition,
+                            "condition": cond,
                         })
 
     return {
         "atomic_units": atomic_units,
         "compound_rows_split": compound_rows_split,
+        "umbrella_rows_split": umbrella_rows_split,
         "compound_columns_split": compound_columns_split,
         "review_queue": review_queue,
         "summary": {
             "total_atomic_units": len(atomic_units),
             "compound_rows": len(compound_rows_split),
+            "umbrella_rows": len(umbrella_rows_split),
             "compound_columns": len(compound_columns_split),
             "review_queue_size": len(review_queue),
         },
@@ -493,6 +632,7 @@ def main():
     ap.add_argument("--footnote-map", required=True, help="Path to footnote_map.json")
     ap.add_argument("--out", required=True, help="Output directory (writes soa_atomic_grid.json)")
     ap.add_argument("--no-refine", action="store_true", help="Skip the LLM refinement pass for low-confidence topic bindings (default: refine when anthropic is available)")
+    ap.add_argument("--no-umbrella-split", action="store_true", help="Skip the LLM-assisted 1D-ii-b umbrella-row split (default: split when anthropic is available)")
     args = ap.parse_args()
 
     with open(args.soa_table) as f:
@@ -500,10 +640,18 @@ def main():
     with open(args.footnote_map) as f:
         footnote_map = json.load(f)
 
-    grid = normalize(soa_table, footnote_map)
+    client = None
+    if HAS_ANTHROPIC and not (args.no_refine and args.no_umbrella_split):
+        try:
+            client = anthropic.Anthropic()
+        except Exception as e:
+            print(f"  ⚠ atomic_normalizer: anthropic client init failed ({e}) — running deterministic-only.")
+            client = None
+
+    grid = normalize(soa_table, footnote_map, client=None if args.no_umbrella_split else client)
 
     if not args.no_refine:
-        grid = refine_low_confidence_bindings(grid, footnote_map)
+        grid = refine_low_confidence_bindings(grid, footnote_map, client=client)
 
     os.makedirs(args.out, exist_ok=True)
     out_path = os.path.join(args.out, "soa_atomic_grid.json")
@@ -517,6 +665,7 @@ def main():
     print(
         f"\u2713 atomic_normalizer: wrote {grid['summary']['total_atomic_units']} atomic units "
         f"({grid['summary']['compound_rows']} compound rows, "
+        f"{grid['summary']['umbrella_rows']} umbrella rows split, "
         f"{grid['summary']['compound_columns']} compound columns, "
         f"{grid['summary']['review_queue_size']} review queue) -> {out_path}"
     )
