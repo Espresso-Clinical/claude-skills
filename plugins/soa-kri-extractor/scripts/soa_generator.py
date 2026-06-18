@@ -72,6 +72,37 @@ def _strip_visit_window(name):
     return out.strip(" -–—")
 
 
+# S7 — §7.2 pre-IP-administration sequencing.
+_IP_ADMIN_RE = re.compile(
+    r"\b(ip administration|investigational product administ|study (?:drug|treatment) administ"
+    r"|injection|dosing|administration of (?:ip|study))\b", re.IGNORECASE)
+# Items that do NOT take a generic pre-dose clause at a treatment visit: continuous
+# capture, post-dose, the dose itself, and already-time-anchored items.
+# No outer \b...\b so prefix terms match plurals ("vital sign" → "Vital signs");
+# abbreviations keep their own boundaries.
+_PRE_DOSE_EXCLUDE_RE = re.compile(
+    r"(\bAEs?\b|\bSAEs?\b|adverse event|concomitant medication|rescue medication"
+    r"|\bNRS\b|diar|daily recording|weekly recording|pain recording|washout"
+    r"|supervision|post[-\s]?injection|post[-\s]?dose|vital sign"
+    r"|\bMRI\b|ultrasound|doppler|imaging|x[-\s]?ray|check[-\s]?in"
+    r"|ip administration|injection|study treatment|dosing)", re.IGNORECASE)
+# Safety blood labs → two-part pre-dose (draw + review before IP); others → single clause.
+_PRE_DOSE_LAB_RE = re.compile(
+    r"(biochemistr|coagulation|blood count|\bcbc\b|h[ae]matolog|chemistry|safety lab)",
+    re.IGNORECASE)
+
+
+def _treatment_visits(grid):
+    """visit_ids that have an IP-administration row in the grid (= treatment visits, §7.2)."""
+    tv = set()
+    for u in grid.get("atomic_units", []) or []:
+        if _IP_ADMIN_RE.search(u.get("procedure_atomic") or ""):
+            v = u.get("visit_atomic")
+            if v:
+                tv.add(v)
+    return tv
+
+
 def _build_protocol_reference(footnote_numbers, page_range_str, soa_label="Schedule of Activities"):
     """Construct 'Schedule of Activities, Footnote N, Footnote M, p.X-p.Y'."""
     if not footnote_numbers:
@@ -250,6 +281,10 @@ def generate(grid_path, alias_path, footnote_map_path, soa_table_path,
     kris = []
     seq = 0
 
+    # S7 — treatment visits (have an IP-administration row); each pre-dose assessment
+    # there must be performed before the injection (§7.2).
+    treatment_visits = _treatment_visits(grid)
+
     # ── Pass 1 — Atomic-grid procedure × visit KRIs (procedure-major) ─────────
     for proc in sorted(units_by_proc.keys()):
         units = sorted(units_by_proc[proc], key=_visit_sort_key)
@@ -300,7 +335,14 @@ def generate(grid_path, alias_path, footnote_map_path, soa_table_path,
             severity = derive_severity(proc, atomic_unit=unit, ontology=ontology, kri_source="atomic_grid")
             deviation_level = derive_deviation_level(proc, kri_source="atomic_grid")
 
-            kris.append({
+            # S7 — §7.2 pre-IP sequencing: tag pre-dose assessments at treatment visits
+            # (additive). Excludes continuous / post-dose / dose-itself / already-anchored
+            # items. The Distiller authors the binary order check (needs EDC order).
+            pre_dose = (visit_id in treatment_visits) and not _PRE_DOSE_EXCLUDE_RE.search(proc)
+            if pre_dose:
+                description += " Per §7.2, this assessment must be performed prior to IP administration."
+
+            kri = {
                 "kri_id": f"SOA-{visit_id}-{seq:03d}",
                 "kri_name": f"{visit_id} - {proc_display}",
                 "description": description,
@@ -317,7 +359,12 @@ def generate(grid_path, alias_path, footnote_map_path, soa_table_path,
                 "_source": "atomic_grid",
                 "_atomic_unit_id": unit.get("unit_id"),
                 "_visit_aliases": unit.get("visit_aliases", []),
-            })
+            }
+            if pre_dose:
+                kri["pre_dose_required"] = True
+                kri["pre_dose_basis"] = "§7.2 — performed prior to IP administration at this treatment visit"
+                kri["pre_dose_kind"] = "two_part_lab" if _PRE_DOSE_LAB_RE.search(proc) else "single"
+            kris.append(kri)
 
     # ── Pass 2 — Check-in KRIs (one per atomic visit) ─────────────────────────
     atomic_visits = sorted({u.get("visit_atomic") for u in grid.get("atomic_units", []) if u.get("visit_atomic")},

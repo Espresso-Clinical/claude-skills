@@ -261,6 +261,20 @@ If the protocol has a body-temp-from-AE-solicitation carve-out (e.g. footnote al
 
 ---
 
+## CRITICAL — Pre-IP-administration sequencing (S7)
+
+At every **treatment visit** (a visit whose grid has an IP-administration row), §7.2 requires each **pre-dose assessment** to be performed **before** the injection. Presence-only rules miss order, so an assessment done *after* the dose wrongly passes. Step 9 Pass 1 tags this **additively** (`_treatment_visits` + the pre-dose classifier):
+
+- **Detect** treatment visits = visit_ids with an IP-administration row.
+- **Apply by default** to each procedure × treatment-visit KRI, **except**:
+  - *Exclude* (continuous / post-dose / the dose itself): AE/SAE capture, concomitant meds, NRS / rescue-med diaries, washout, post-injection vitals + supervision, the IP-injection row, check-ins.
+  - *Already time-anchored* (keep, don't re-tag): vital signs (own pre/post via FN5), imaging (MRI/ultrasound/X-ray).
+- **Tag** qualifying KRIs with structured fields: `pre_dose_required: true`, `pre_dose_basis: "§7.2 …"`, `pre_dose_kind: single | two_part_lab` (safety blood labs are **two-part**: draw + review before IP), plus one description sentence.
+
+The rule wording stays light — the **Distiller** authors the binary order check, which is testable **only if the EDC records order** (`evidence_expected` requests the assessment time relative to IP-administration time). *Note:* the "same assessment across arms = separate rules" point is **X1 arm-keying** (cross-cutting), not part of this tagging.
+
+---
+
 ## CRITICAL — Citation & quote format: topic-bound, multi-footnote
 
 ### Combine all applicable footnotes for a KRI
