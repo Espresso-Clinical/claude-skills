@@ -55,6 +55,7 @@ Drop any rule that is primarily:
 - **Pure term or threshold definitions** with no embedded action. "A significant pathogen is >10⁶ CFU per plate." Defines a threshold used elsewhere; doesn't itself trigger a deviation.
 - **Pure aspirations** with no measurable anchor (Case C above).
 - **Subjective investigator-judgment rules** with no objective data point. "Any local reaction that in the investigator's judgment constitutes an AE." If the only trigger is opinion, the rule isn't data-checkable.
+  - **Mixed objective + subjective bundle:** do NOT drop the whole bundle — the objective trigger(s) keep it binary. Keep it, and flag it in the audit log for the extractor to split into one rule per trigger. Only purely-subjective members are non-binary; never lose the objective check because a subjective member rides along.
 
 ## Keep list — patterns that satisfy the filter
 

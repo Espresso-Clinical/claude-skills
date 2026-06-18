@@ -88,6 +88,9 @@ When a procedure is performed only at discretion but the authorization is *docum
 ### 12. Presence/activity rules check performance, not another domain's conclusion
 An "activity performed" rule (a SOA assessment, a visit procedure) verifies that the activity was **performed and documented** — it must NOT re-judge a conclusion owned by another domain. A "screening eligibility assessment performed" rule checks that the assessment happened; whether the subject actually met eligibility is ELIG's job, not this rule's. Narrow an overreaching rule to what its own data shows: the `deviation` is "the activity was not performed/documented", never "…and the criteria were not all met". Align sibling rules across phases/visits to the same corrected scope.
 
+### 13. Point to a governing rule instead of duplicating its logic
+When a rule's timing or condition is **owned by a separate rule** — a stopping rule, a washout, a governing visit-window — do not copy that logic into this rule; reference it with a short pointer ("…governed by the discontinuation rule") and keep only this rule's own check. This is the one bounded exception to comprehensiveness (rule 1): fold in every checkable detail that is *this* rule's, but point to — rather than duplicate — logic another rule already owns, so the two can't drift out of sync.
+
 ## Worked examples (real rules, across the five domains)
 
 ### SOA-008 — V1 Biochemistry (required-subset lab; the flagship)
