@@ -30,7 +30,7 @@ PHASE 3 — Validate
   Step 18  Verbatim verification            (deterministic — BLOCKING)
 
 PHASE 4 — Assemble
-  Step 19  Assembly                         (deterministic, procedure-major order)
+  Step 19  Cross-domain route-out (S5) + Assembly (deterministic, procedure-major order)
   Step 20  Intra-SOA dedup                  (deterministic, with alias-map semantic)
   Step 21  Flagged-review consolidated table (deterministic)
 ```

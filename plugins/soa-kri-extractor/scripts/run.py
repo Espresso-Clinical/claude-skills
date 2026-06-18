@@ -44,7 +44,7 @@ STEP_CATALOG = [
     ("16",         "Full accuracy judging (5-judge × 6 checks C1–C6)",               True),
     ("17",         "Consistency check",                                              False),
     ("18",         "Full verbatim verification (page-range aware)",                  True),
-    ("19",         "Assembly (JSON + Excel, procedure-major)",                       False),
+    ("19",         "Cross-domain route-out (S5) + Assembly (JSON + Excel, procedure-major)", False),
     ("20",         "Intra-SOA dedup (priority hierarchy + Cross-Section Merge Guard + alias-map)", False),
     ("21",         "End-of-run flagged-review consolidated table",                   False),
     ("coherence",  "Coherence check (Description ↔ Rule ↔ Reference ↔ Severity)",   False),
@@ -275,6 +275,11 @@ def run_step_18(pdf, out_dir, **kw):
 
 def run_step_19(pdf, out_dir, **kw):
     print(f"\n[ Step 19 — {STEP_DESC['19']} ]")
+    # S5 — route cross-domain (restriction/washout/prior-exposure/stopping) rules OUT
+    # of SOA into routed_to_core.json BEFORE assembling, so the golden set excludes them.
+    r = subprocess.run([sys.executable, os.path.join(SCRIPTS_DIR, "cross_domain_router.py"),
+                        "--out", out_dir], capture_output=True, text=True)
+    print(r.stdout.strip())
     from step4a_assemble import assemble
     assemble(out_dir, golden_set_name="soa_golden_set")
     return True

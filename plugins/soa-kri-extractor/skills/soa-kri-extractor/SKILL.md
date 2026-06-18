@@ -412,6 +412,16 @@ See `references/steps.md` for detailed prompts and per-step logic.
 
 ---
 
+## Step 19 — Cross-domain route-out (S5)
+
+Before assembly, `cross_domain_router.py` flags SOA-surfaced rules whose content is really a **medication restriction, washout, prior-exposure, or stopping / treatment-discontinuation** rule, removes them from the SOA golden set, and writes them to **`routed_to_core.json`** with a `suggested_domain` (washout / prior-exposure → ELIG; restriction / stopping → SAF) for the Core extractor to ingest. The aim: SOA holds only visit-anchored assessments; the same restriction never lives in both SOA and SAF/ELIG.
+
+**Conservative — no LLM, default keep:**
+- Only **non-visit-anchored** KRIs are candidates (`SOA-CROSS-*`, `SOA-ORPHAN-FOOTNOTE-*`). Per-visit grid / check-in KRIs are **always kept** — including a *visit-anchored* washout like `V1 - Analgesic washout before Day 0 pain assessment` and the per-visit `Concomitant medications` **recording** activity.
+- A candidate is routed only on a clear restriction / washout / prior-exposure / stopping signal; otherwise it stays in SOA.
+
+---
+
 ## Step 20 — Intra-SOA dedup
 
 **Priority hierarchy (highest → lowest):**
@@ -516,6 +526,7 @@ python scripts/run.py \
 | `consistency_report.json` | Step 17 |
 | `verify_report.json` | Step 18 |
 | `soa_golden_set.json`, `soa_golden_set.xlsx` | Step 19 |
+| `routed_to_core.json` | Step 19 (S5 cross-domain route-out) |
 | `dedup_report.json` | Step 20 |
 | `flagged_review_decisions.json` | Step 21 |
 
@@ -538,5 +549,6 @@ python scripts/run.py \
 - `scripts/step3_5_orphan_scan.py` — Step 13
 - `scripts/step3b_accuracy.py` — Step 16 (5-judge × 6 checks C1-C6)
 - `scripts/step3d_verify.py` — Step 18 (page-range aware)
+- `scripts/cross_domain_router.py` — Step 19 (S5 cross-domain route-out)
 - `scripts/step4a_dedup.py` — Step 20 (intra-SOA priority)
 - `scripts/sync-to-cache.sh` — sync source → plugin cache
