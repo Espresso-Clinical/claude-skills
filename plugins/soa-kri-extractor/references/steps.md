@@ -103,6 +103,8 @@ Sources of the `<items>` list:
 1. `footnote_enrichment_parser.parse_enrichment()` extracts analyte / parameter lists from the topic-bound footnote fragment (Step 7 1D-iv).
 2. `bundle_component_table.get_bundle_components()` provides component lists for recognized bundles (Vital signs → BP, HR, temp; CBC → RBC, HGB, ...).
 
+`parse_enrichment()` also captures **named drugs/agents** when a footnote frames them with a permitted / prohibited / rescue cue (e.g. `"patients may use acetaminophen and/or metamizole (dipyrone)"`). These are surfaced in the SOURCE line only (one labeled clause) so the drug names are not lost; the rule wording is left light because the Distiller re-authors it.
+
 ## Step 12 — Auto-judgment 6-judge panel prompt
 
 ```

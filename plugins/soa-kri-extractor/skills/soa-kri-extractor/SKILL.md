@@ -233,6 +233,7 @@ DEVIATION: For an active subject expected to attend SCR, no Blood chemistry reco
 | Sample type / volume / handling | SOURCE + DEVIATION |
 | Sub-visit timing (pre-dose, post-dose, peak) | SOURCE + CHECK |
 | Frequency-within-visit (`twice`, `every 15 min`) | CHECK + DEVIATION |
+| Named drugs / agents named under a permitted / prohibited / rescue cue (e.g. `"patients may use acetaminophen and/or metamizole"`) | SOURCE — surfaced so the drug names are captured; final rule wording is authored downstream by the Distiller |
 
 Implementation: `footnote_enrichment_parser.py` extracts these from the topic-bound footnote fragment (Step 1D-iv) and the SOA generator (Step 9) injects them into the rule.
 

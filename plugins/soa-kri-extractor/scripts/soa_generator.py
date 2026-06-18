@@ -83,10 +83,20 @@ def _build_rule_for_llm_procedure(procedure, visit_display, enrichment, conditio
     timing = enrichment.get("timing_within_visit")
     conditionality = enrichment.get("conditionality") or condition
 
+    # Named drugs/agents (S2) — surfaced in SOURCE so they are not lost. The final
+    # rule wording is (re)authored downstream by the Distiller, so this is kept light.
+    named_drugs = enrichment.get("named_drugs") or []
+    drug_src = ""
+    if named_drugs:
+        label = {"prohibited": "Prohibited", "rescue": "Permitted rescue",
+                 "permitted": "Permitted"}.get(enrichment.get("drug_context"), "Named")
+        drug_src = f" {label} medications: {', '.join(named_drugs)}."
+
     # SOURCE
     source = f"The {procedure} record at the {visit_display} visit, per subject."
     if analyte_list:
         source += f" Required {list_type}: {', '.join(analyte_list)}."
+    source += drug_src
 
     # CHECK
     check = f"{procedure} was performed and dated at {visit_display} per the Schedule of Activities."
