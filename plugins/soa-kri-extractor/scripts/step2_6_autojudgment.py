@@ -13,8 +13,8 @@ DISTINCTION from other judging steps in the skill:
   - Step 3B decides CORRECTNESS of every KRI after assembly (100% coverage,
     5-judge panel). Runs in Phase 3.
   - Step 3.5 orphan scan discovers MISSED rules (6-agent panel). Runs in Phase 3.
-  - Step 4A-NDEF sweep reclassifies non-definable KRIs (6-judge panel). Runs in
-    Phase 4 post-assembly.
+  - Non-binary / non-verifiable rules are NOT segregated here; the downstream
+    golden-set-binary-rule-distiller's binary filter drops them.
 Each panel has its own distinct purpose, distinct timing, and distinct artifact.
 Step 2.6 does NOT replace any of the above; it only handles the Phase-2
 inclusion decision that the user previously did manually.
@@ -162,8 +162,8 @@ def layer1_5_atomicity(kri):
     subjective = ["as appropriate", "as needed", "as required", "if clinically appropriate"]
     for s in subjective:
         if s in rule and not re.search(r"\d", rule):
-            return {"pass": True, "reason": "subjective wording flagged but may be valid NDEF post-assembly"}
-            # NOTE: do NOT reject — NDEF Sweep handles non-verifiable post-assembly.
+            return {"pass": True, "reason": "subjective wording flagged but kept; binary filtering is downstream"}
+            # NOTE: do NOT reject — the downstream distiller's binary filter drops non-verifiable rules.
 
     return {"pass": True, "reason": "Layer 1.5 atomicity check passed"}
 

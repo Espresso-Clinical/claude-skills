@@ -32,9 +32,9 @@ PHASE 3 — Validate
 PHASE 4 — Assemble
   Step 19  Assembly                         (deterministic, procedure-major order)
   Step 20  Intra-SOA dedup                  (deterministic, with alias-map semantic)
-  Step 21  NDEF sweep                       (6-judge LLM panel)
-  Step 22  Flagged-review consolidated table (deterministic)
+  Step 21  Flagged-review consolidated table (deterministic)
 ```
+(Non-binary / non-verifiable rules are NOT segregated by this skill — the downstream golden-set-binary-rule-distiller's binary filter drops them.)
 
 ## Step 7 — Atomic Normalization: footnote-driven test decomposition (1D-ii-b)
 
@@ -255,32 +255,3 @@ Return JSON array of candidates:
 ```
 
 Consolidation: ≥4/6 agents → HIGH (auto-promote); 2-3/6 → USER_DECISION; 1/6 → LOW (logged).
-
-## Step 21 — NDEF sweep prompt
-
-```
-You are determining whether this KRI's rule_for_llm can produce a deterministic
-YES/NO answer when applied to subject data.
-
-KRI:
-{kri_record_json}
-
-Vote: DEFINABLE or NON_DEFINABLE.
-
-NON_DEFINABLE if the rule involves:
-  - Investigator judgment ("in the investigator's opinion", "if clinically significant")
-  - Undefined time windows ("as soon as possible", "promptly", "in a timely manner")
-  - Undefined effort / quantity ("reasonable effort", "adequate", "sufficient")
-  - Subjective thresholds
-  - Any non-binary wording
-
-DEFINABLE if the rule has:
-  - Numeric threshold or window
-  - Named data field
-  - Countable event
-  - Yes/no observable condition
-
-Return: {"vote": "DEFINABLE|NON_DEFINABLE", "reason": "≤20 words"}
-```
-
-6-agent panel (3 Claude + 3 Gemini). ≥5 NON_DEFINABLE → move to NDEF. 3-4 → user decision. 0-2 → keep in source.

@@ -9,7 +9,6 @@ stay consistent with the existing 10-agent extraction panel's framing.
 Step 2.6 decides INCLUSION in the Golden Set. It is distinct from:
   - Step 3B accuracy judging (decides CORRECTNESS, runs post-assembly on 100%)
   - Step 3.5 orphan scan (discovers MISSED rules)
-  - Step 4A-NDEF sweep (reclassifies non-definable KRIs)
 """
 
 
@@ -37,10 +36,10 @@ GUARDRAILS — apply to every KRI you judge:
    the deterministic dedup filter, it should already have been caught by Layer 2.
    If you see a duplicate pair the filter missed, flag it.
 
-6. **NDEF scope**: if the rule is genuinely non-verifiable (investigator judgment,
-   undefined time windows, undefined effort), the KRI is still valid here — it
-   will be moved to NDEF by Step 4A-NDEF post-assembly. Do not reject just for
-   being non-verifiable; reject only if the rule is not a real obligation.
+6. **Non-verifiable scope**: if the rule is genuinely non-verifiable (investigator
+   judgment, undefined time windows, undefined effort), the KRI is still valid here —
+   the downstream distiller's binary filter drops non-verifiable rules. Do not reject
+   just for being non-verifiable; reject only if the rule is not a real obligation.
 
 Return valid JSON with no markdown fences, no prose, no extra text.
 """

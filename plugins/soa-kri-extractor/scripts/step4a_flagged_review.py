@@ -1,7 +1,7 @@
 """
 Step 4A-FlaggedReview — End-of-run cross-domain flagged-review table.
 
-Runs AFTER Step 4A-NDEF (last step before Golden Set finalization). Collects
+Runs AFTER Step 20 dedup (last step before Golden Set finalization). Collects
 every flagged-and-defaulted-to-rejected KRI from all 5 domains' Step 2.6
 autojudgment outputs and produces a single consolidated review table with
 FULL KRI columns so the user can efficiently scan and re-include any they want.

@@ -1,11 +1,13 @@
 """
 run.py — soa-kri-extractor orchestrator (canonical entry point).
 
-Runs the 22-step SOA-only pipeline:
+Runs the 21-step SOA-only pipeline:
   Phase 1 (Discover):  1 → 6  manifest, table, footnote_map, atomic_grid, alias_map
   Phase 2 (Extract):   9, 10, 11, 12  generator, SOA-text panel, obligation inventory, autojudgment
   Phase 3 (Validate):  13–18  orphan scan, completeness, heuristics, accuracy, consistency, verbatim
-  Phase 4 (Assemble):  19–22  assembly, dedup, NDEF sweep, flagged review
+  Phase 4 (Assemble):  19–21  assembly, dedup, flagged review
+  (Non-binary / non-verifiable rules are NOT segregated here — the downstream
+   golden-set-binary-rule-distiller's binary filter drops them.)
 
 Blocking gates: 13 (orphan scan), 16 (accuracy), 18 (verbatim).
 
@@ -44,8 +46,7 @@ STEP_CATALOG = [
     ("18",         "Full verbatim verification (page-range aware)",                  True),
     ("19",         "Assembly (JSON + Excel, procedure-major)",                       False),
     ("20",         "Intra-SOA dedup (priority hierarchy + Cross-Section Merge Guard + alias-map)", False),
-    ("21",         "NDEF sweep (6-judge panel)",                                     False),
-    ("22",         "End-of-run flagged-review consolidated table",                   False),
+    ("21",         "End-of-run flagged-review consolidated table",                   False),
     ("coherence",  "Coherence check (Description ↔ Rule ↔ Reference ↔ Severity)",   False),
 ]
 
@@ -252,7 +253,7 @@ def run_step_18(pdf, out_dir, **kw):
     print(f"\n[ Step 18 — {STEP_DESC['18']} ]  (BLOCKING)")
     from step3d_verify import verify_all
     merged = {"kris": []}
-    for d in ["SOA", "NDEF"]:
+    for d in ["SOA"]:
         p = os.path.join(out_dir, f"raw_{d}.json")
         if not os.path.exists(p):
             continue
@@ -289,14 +290,6 @@ def run_step_20(pdf, out_dir, **kw):
 
 def run_step_21(pdf, out_dir, **kw):
     print(f"\n[ Step 21 — {STEP_DESC['21']} ]")
-    cmd = [sys.executable, os.path.join(SCRIPTS_DIR, "step4a_ndef_sweep.py"), "--out", out_dir]
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    print(result.stdout.strip()[-800:])
-    return True
-
-
-def run_step_22(pdf, out_dir, **kw):
-    print(f"\n[ Step 22 — {STEP_DESC['22']} ]")
     cmd = [sys.executable, os.path.join(SCRIPTS_DIR, "step4a_flagged_review.py"), "--out", out_dir]
     result = subprocess.run(cmd, capture_output=True, text=True)
     print(result.stdout.strip()[-800:])
@@ -322,7 +315,7 @@ STEP_RUNNERS = {
     "9": run_step_9, "10": run_step_10, "11": run_step_11, "12": run_step_12,
     "13": run_step_13, "14": run_step_14, "15": run_step_15, "16": run_step_16,
     "17": run_step_17, "18": run_step_18, "19": run_step_19, "20": run_step_20,
-    "21": run_step_21, "22": run_step_22, "coherence": run_step_coherence,
+    "21": run_step_21, "coherence": run_step_coherence,
 }
 
 

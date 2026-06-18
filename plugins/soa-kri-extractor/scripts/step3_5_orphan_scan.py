@@ -50,9 +50,9 @@ N_CLAUDE_AGENTS = 3
 N_GEMINI_AGENTS = 3
 N_PANEL = N_CLAUDE_AGENTS + N_GEMINI_AGENTS  # 6
 DOMAINS = ["SOA", "ELIG", "SAF", "END", "OPS"]
-# NDEF is intentionally excluded here: orphans are classified into one of the 5
-# real domains. Reclassification to NDEF happens post-assembly in the NDEF Sweep
-# (Step 4A-NDEF, scripts/step4a_ndef_sweep.py).
+# Orphans are classified into one of the 5 real domains. Non-binary / non-verifiable
+# rules are NOT segregated by this skill — the downstream distiller's binary filter
+# drops them.
 FALLBACK_DOMAIN = "OPS"  # Used when an agent proposes an unknown domain.
 
 DOMAIN_LABELS = {

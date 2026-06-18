@@ -306,7 +306,7 @@ def main():
 
     out_dir = args.out
     raw_by_domain = {}
-    for dom in ["SOA", "ELIG", "SAF", "END", "OPS", "NDEF"]:
+    for dom in ["SOA", "ELIG", "SAF", "END", "OPS"]:
         path = os.path.join(out_dir, f"raw_{dom}.json")
         if not os.path.exists(path):
             continue

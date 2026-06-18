@@ -330,7 +330,7 @@ SOA-ORPHAN-FOOTNOTE-001
 
 ---
 
-## Pipeline — 18 steps
+## Pipeline — 21 steps
 
 ```
 PHASE 1 — Discover
@@ -360,9 +360,9 @@ PHASE 3 — Validate
 PHASE 4 — Assemble
   Step 19 — Assembly (JSON + Excel, procedure-major)
   Step 20 — Intra-SOA dedup (priority hierarchy + Cross-Section Merge Guard + alias-map semantic)
-  Step 21 — NDEF sweep (6-judge panel)
-  Step 22 — Flagged-review consolidated table
+  Step 21 — Flagged-review consolidated table
 ```
+> Non-binary / non-verifiable rules are NOT segregated by this skill — the downstream golden-set-binary-rule-distiller's binary filter drops them.
 
 See `references/steps.md` for detailed prompts and per-step logic.
 
@@ -434,23 +434,6 @@ See `references/steps.md` for detailed prompts and per-step logic.
 
 ---
 
-## Step 21 — NDEF sweep
-
-KRIs whose `rule_for_llm` cannot produce a deterministic YES/NO answer are moved to NDEF:
-
-- Investigator judgment (`"in the investigator's opinion"`, `"if clinically significant"`)
-- Undefined time windows (`"as soon as possible"`, `"promptly"`, `"in a timely manner"`)
-- Undefined effort / quantity (`"reasonable effort"`, `"adequate"`, `"sufficient"`)
-- Subjective thresholds
-- Any non-binary wording
-
-**6-agent judge panel** (3 Claude + 3 Gemini) votes DEFINABLE / NON_DEFINABLE. Moved KRIs get:
-- `category_id` → `"NDEF"`, `category_label` → `"Non-Definable"`
-- `rule_for_llm` rewritten to `"NDEF — Non-verifiable: [reason]"`
-- `original_domain` field set for audit
-
----
-
 ## Quality rules (every KRI must satisfy)
 
 1. **Faithfulness:** Use exact drug names, doses, thresholds, timing windows from the protocol. Never generalize.
@@ -467,7 +450,7 @@ KRIs whose `rule_for_llm` cannot produce a deterministic YES/NO answer are moved
 12. **Footnote associations are deterministic:** They come from `footnote_map.json` (Step 6), NEVER from LLM inference.
 13. **Quote anchoring — one obligation per quote.**
 14. **Discard traceability:** Every discarded KRI must have a non-empty `reason` field.
-15. **`rule_for_llm` must be binary and machine-readable** (non-NDEF only): unambiguous, specifies WHAT to check, WHEN, HOW, in relation to WHAT protocol requirement.
+15. **`rule_for_llm` must be binary and machine-readable**: unambiguous, specifies WHAT to check, WHEN, HOW, in relation to WHAT protocol requirement.
 16. **3-line SOURCE/CHECK/DEVIATION format is MANDATORY** for `rule_for_llm`.
 17. **Footnote details embedded in rule_for_llm** when the footnote provides parameter / analyte / measurement / methodology specifics.
 18. **Bundle component lists** in `rule_for_llm` for recognized standardized bundles.
@@ -534,8 +517,7 @@ python scripts/run.py \
 | `verify_report.json` | Step 18 |
 | `soa_golden_set.json`, `soa_golden_set.xlsx` | Step 19 |
 | `dedup_report.json` | Step 20 |
-| `ndef_sweep_report.json`, `raw_NDEF.json` | Step 21 |
-| `flagged_review_decisions.json` | Step 22 |
+| `flagged_review_decisions.json` | Step 21 |
 
 ---
 
@@ -557,5 +539,4 @@ python scripts/run.py \
 - `scripts/step3b_accuracy.py` — Step 16 (5-judge × 6 checks C1-C6)
 - `scripts/step3d_verify.py` — Step 18 (page-range aware)
 - `scripts/step4a_dedup.py` — Step 20 (intra-SOA priority)
-- `scripts/step4a_ndef_sweep.py` — Step 21
 - `scripts/sync-to-cache.sh` — sync source → plugin cache
