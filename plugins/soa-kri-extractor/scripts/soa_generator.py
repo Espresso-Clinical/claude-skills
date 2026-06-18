@@ -51,6 +51,27 @@ def _visit_display(visit_id, visits_by_id):
     return visit_id
 
 
+# S3 — strip a visit-defining window from a PROCEDURE name. Applied to procedure
+# KRI names only: check-in names keep their window, and the procedure's own
+# footnote-defined timing stays in the rule body (not the name).
+_PROC_WINDOW_RE = re.compile(
+    r"\s*\([^()]*(?:\b(?:days?|weeks?)\s*\d+|±\s*\d+\s*day|\bbi-?weekly\b|\bschedule\b)[^()]*\)"
+    r"|\s*±\s*\d+\s*days?\b"
+    r"|\s*\b(?:days?|weeks?)\s*\d+\s*[-–—]\s*\d+\b",
+    re.IGNORECASE,
+)
+
+
+def _strip_visit_window(name):
+    """Remove a visit window (e.g. '(Day 12-16)', '± 1 day', 'Day 26-30') from a
+    procedure name. No-op when the name has no window."""
+    if not name:
+        return name
+    out = _PROC_WINDOW_RE.sub("", name)
+    out = re.sub(r"\s{2,}", " ", out)
+    return out.strip(" -–—")
+
+
 def _build_protocol_reference(footnote_numbers, page_range_str, soa_label="Schedule of Activities"):
     """Construct 'Schedule of Activities, Footnote N, Footnote M, p.X-p.Y'."""
     if not footnote_numbers:
@@ -234,6 +255,9 @@ def generate(grid_path, alias_path, footnote_map_path, soa_table_path,
         units = sorted(units_by_proc[proc], key=_visit_sort_key)
         # Detect recognized bundle and pull components
         bundle_canon, bundle_components = get_bundle_components(proc)
+        # S3 — window-free name for all DISPLAY fields (name, description, quote,
+        # rule body). Lookups (bundle/severity/enrichment hint) keep the raw label.
+        proc_display = _strip_visit_window(proc)
 
         for unit in units:
             visit_id = unit.get("visit_atomic") or "V?"
@@ -253,7 +277,7 @@ def generate(grid_path, alias_path, footnote_map_path, soa_table_path,
 
             seq += 1
             protocol_reference = _build_protocol_reference(fn_nums, page_range_str)
-            supporting_quote = _build_supporting_quote(fragment, proc)
+            supporting_quote = _build_supporting_quote(fragment, proc_display)
             combined_ref = _build_combined_ref(protocol_reference, supporting_quote)
             additional_footnotes = None
             if fn_nums:
@@ -265,9 +289,9 @@ def generate(grid_path, alias_path, footnote_map_path, soa_table_path,
                 if parts:
                     additional_footnotes = " | ".join(parts)
 
-            rule_for_llm = _build_rule_for_llm_procedure(proc, visit_display, enrichment, condition or None)
+            rule_for_llm = _build_rule_for_llm_procedure(proc_display, visit_display, enrichment, condition or None)
 
-            description = f"Verifies that {proc} was performed at the {visit_id} visit per the Schedule of Activities table."
+            description = f"Verifies that {proc_display} was performed at the {visit_id} visit per the Schedule of Activities table."
             if enrichment.get("analyte_list"):
                 description += f" The record must include the required {enrichment['list_type']} per the protocol footnote."
             if enrichment.get("methodology"):
@@ -278,7 +302,7 @@ def generate(grid_path, alias_path, footnote_map_path, soa_table_path,
 
             kris.append({
                 "kri_id": f"SOA-{visit_id}-{seq:03d}",
-                "kri_name": f"{visit_id} - {proc}",
+                "kri_name": f"{visit_id} - {proc_display}",
                 "description": description,
                 "category_id": "SOA",
                 "category_label": CATEGORY_LABEL,
