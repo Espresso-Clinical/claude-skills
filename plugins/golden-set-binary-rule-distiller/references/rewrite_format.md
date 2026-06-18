@@ -19,6 +19,7 @@ acceptance:            # open set of sub-slots — use ONLY the ones the rule ne
   required: ...        # mandatory items
   preferred: ...       # non-mandatory but preferred
   conditional: ...     # conditional trigger / exception
+  trigger: ...         # the condition that activates the check (e.g. an optional procedure's record exists)
   pass: ...            # the plain pass condition (criteria-style rules)
   override: ...        # a documented waiver that satisfies the rule
 deviation: the violation in clinical terms, derived from applies_to + acceptance
@@ -66,6 +67,30 @@ The `Description` and `Protocol Reference & Quote` are hypotheses. If the `Descr
 - A **pre-treatment lab** that a footnote makes mandatory ("the following must be available and reviewed prior to first treatment: …") DOES get a `required` subset (the mandatory items, with AND/OR logic) and a `preferred` full panel.
 The analyte list is a deviation trigger **only** where a footnote makes it mandatory.
 
+### 9. Timeliness rules — name the date proxy in `evidence_expected`
+A "within N hours/days of an event" rule is authored as a date difference. In `evidence_expected`, name the two dated artifacts the check differences (the event date and the action date). When the exact clock the protocol names isn't recorded, fall back to the closest available dates and say so plainly — never drop the rule for lack of the precise timestamp. If no clean clock exists at all, narrow the `deviation` to the part that is recorded (e.g. "the outcome was not recorded"). See filter_criteria.md "Timeliness / reporting-deadline rules".
+
+### 10. Visit-anchored procedures — `timing` is the visit, not the visit's window
+For a procedure/test/assessment scheduled at a specific visit, `acceptance.timing` states that it was performed **at/for that visit** (by its visit label — "performed at the V3 visit", "performed and dated for the Screening visit"), NOT the visit's calendar window ("Day 12-16", "Day -29 to 0"). The visit's date window is checked by its **own dedicated visit-timing rule** (the "check-in within window" rule), so a per-procedure rule must never restate it — that would duplicate the visit check and mis-attribute the window to the procedure. Keep in `timing` the procedure's **own** footnote-defined acceptability window ("may be drawn up to 4 days before the visit", "a result from up to 3 months before eligibility confirmation is acceptable") and any pre-dose sequencing clause ("prior to IP administration").
+- ✅ `timing: "performed at the V3 visit, prior to IP administration"`
+- ✅ `timing: "performed and dated for the Screening visit; a result from up to 3 months before eligibility confirmation is acceptable"`
+- ❌ `timing: "performed Day 12-16"` (that Day window is the visit's own check — it belongs to the visit check-in rule, not the procedure)
+
+### 11. Optional / Sponsor-gated procedures — invert the rule (deviation = performed WITHOUT authorization)
+When a procedure is performed only at discretion but the authorization is *documentable* — "per Sponsor instruction", an imaging-plan designation, a recorded per-protocol gate — do NOT author an ordinary presence rule (omission is not a deviation here) and do NOT drop it. **Invert** it: the deviation is performing it WITHOUT documented authorization. Make omission-is-not-a-deviation explicit, and use:
+- `conditional`: state plainly that the procedure is optional, has no default requirement, and that OMISSION IS NOT A DEVIATION
+- `trigger`: the procedure record exists in the subject's data
+- `pass`: EITHER it was not performed, OR it was performed AND the authorization is documented
+- `deviation`: performed WITHOUT documented authorization
+
+`evidence_expected` must name the authorization artifact (e.g. "the Sponsor imaging-plan instruction designating the patient, or its documented absence") plus the procedure record. Distinguish from a procedure *required for a protocol-designated subset* ("applicable sites", "all main-phase patients per the imaging plan") — that stays an ordinary presence rule scoped to the designated population via `conditional`, with the normal "designated subject lacking it" deviation (rule 8). Drop only when there is neither a documentable authorization nor a protocol-defined recorded trigger to check against.
+
+### 12. Presence/activity rules check performance, not another domain's conclusion
+An "activity performed" rule (a SOA assessment, a visit procedure) verifies that the activity was **performed and documented** — it must NOT re-judge a conclusion owned by another domain. A "screening eligibility assessment performed" rule checks that the assessment happened; whether the subject actually met eligibility is ELIG's job, not this rule's. Narrow an overreaching rule to what its own data shows: the `deviation` is "the activity was not performed/documented", never "…and the criteria were not all met". Align sibling rules across phases/visits to the same corrected scope.
+
+### 13. Point to a governing rule instead of duplicating its logic
+When a rule's timing or condition is **owned by a separate rule** — a stopping rule, a washout, a governing visit-window — do not copy that logic into this rule; reference it with a short pointer ("…governed by the discontinuation rule") and keep only this rule's own check. This is the one bounded exception to comprehensiveness (rule 1): fold in every checkable detail that is *this* rule's, but point to — rather than duplicate — logic another rule already owns, so the two can't drift out of sync.
+
 ## Worked examples (real rules, across the five domains)
 
 ### SOA-008 — V1 Biochemistry (required-subset lab; the flagship)
@@ -108,6 +133,20 @@ deviation: "a Screening attendee with no qualifying posteroanterior knee X-ray w
 provenance: "SoA Run-In, p.26."
 ```
 
+### SOA-203c — V6 MRI, Sponsor-instructed subset (inverted optional)
+```yaml
+intent: "An MRI at V6 is performed only for the subset designated by Sponsor instruction; performing it WITHOUT a Sponsor instruction is the deviation, omitting it is not."
+applies_to: "subjects who attended the V6 (6 months) visit in the randomized phase"
+evidence_expected: "the Sponsor imaging-plan instruction designating the patient for imaging (or its documented absence), and any V6 MRI scan record."
+acceptance:
+  conditional: "MRI at V6 is optional, performed only for the Sponsor-designated subset per the imaging plan; there is no default requirement and OMISSION IS NOT A DEVIATION"
+  trigger: "a V6 MRI scan exists in the subject's record"
+  pass: "EITHER no V6 MRI was performed, OR a V6 MRI was performed AND a Sponsor instruction designating the patient is documented"
+deviation: "a subject who underwent a V6 MRI WITHOUT a documented Sponsor instruction authorizing it."
+provenance: "SoA Randomized Phase p.31-34; §14.4.3 p.78."
+```
+The check is inverted: the deviation is unauthorized *performance*, not omission. Contrast Mode 2 (required-for-designated-subset, e.g. CRPM "for subjects at applicable sites"), authored as an ordinary scoped presence rule.
+
 ### ELIG-EXC-022 — Recent-IP exclusion (pass + override; eligibility denominator)
 ```yaml
 intent: "Subject had no other IP / interventional-trial participation within 60 days of first treatment (exclusion #22)."
@@ -131,6 +170,7 @@ acceptance:
 deviation: "an SAE reported to the Sponsor more than 24 hours after investigator awareness."
 provenance: "§15.6 p.84."
 ```
+If the precise awareness timestamp isn't captured, `evidence_expected` names the closest recorded dates instead (e.g. the SAE onset date and the SAE-form entry date) and the check becomes (entry date − onset date) ≤ 24 h — state the proxy explicitly rather than dropping the rule.
 
 ### OPS-COMP-003 — EC/IRB approval before activation (site denominator)
 ```yaml

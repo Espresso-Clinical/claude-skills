@@ -7,7 +7,8 @@ Input JSON is an array of rule objects with keys:
 
 The script preserves the source column order, inserts "Deviation Level" right
 after "Severity", and applies consistent professional formatting (Arial font,
-header fill, wrapped cell text, frozen header row, sensible column widths).
+header fill, wrapped cell text, frozen header row, sensible column widths, and
+auto-fit row heights so multi-line YAML cells are fully visible on open).
 
 Usage:
     python write_filtered_xlsx.py <input.json> <output.xlsx>
@@ -31,6 +32,22 @@ WIDTHS = {
     "Protocol Reference & Quote": 50, "Severity": 11,
     "Deviation Level": 14,
 }
+
+
+def _estimate_row_height(values, widths_by_idx, line_pts=15.0, max_pts=409.0):
+    """Approximate auto-fit: the tallest cell drives the row height so wrapped
+    multi-line text (notably the YAML Rule for LLM) is fully visible on open."""
+    max_lines = 1
+    for idx, val in enumerate(values, 1):
+        text = "" if val is None else str(val)
+        chars_per_line = max(8, int(widths_by_idx.get(idx, 20)))
+        lines = 0
+        for segment in text.split("\n"):
+            seg_len = len(segment.rstrip())
+            lines += max(1, -(-seg_len // chars_per_line))  # ceil division
+        if lines > max_lines:
+            max_lines = lines
+    return min(max_pts, max(line_pts, max_lines * line_pts))
 
 
 def write(in_json: str, out_xlsx: str) -> dict:
@@ -62,10 +79,14 @@ def write(in_json: str, out_xlsx: str) -> dict:
             ws.append([r.get(c, "") for c in FINAL_COLS])
         for idx, col in enumerate(FINAL_COLS, 1):
             ws.column_dimensions[get_column_letter(idx)].width = WIDTHS[col]
-        for row in ws.iter_rows(min_row=2, max_row=ws.max_row):
+        widths_by_idx = {i: WIDTHS[c] for i, c in enumerate(FINAL_COLS, 1)}
+        for ridx, row in enumerate(ws.iter_rows(min_row=2, max_row=ws.max_row), start=2):
             for cell in row:
                 cell.font = body_font
                 cell.alignment = Alignment(vertical="top", wrap_text=True)
+            ws.row_dimensions[ridx].height = _estimate_row_height(
+                [c.value for c in row], widths_by_idx
+            )
         ws.freeze_panes = "A2"
         counts[sheet_name] = len(sheet_rows)
 

@@ -24,6 +24,7 @@ Dropping a rule is irreversible, so it takes TWO panels agreeing across TWO oppo
 You are reviewer #<N> of <total> independently screening a clinical-trial Golden Set for rules that CANNOT be turned into a binary, deviation-producing rule.
 
 KEEPABLE: a binary check can be authored — the rule has a measurable data anchor (number, date, presence/absence, category), even if the threshold is fuzzy ("approximately").
+KEEP timeliness / reporting-deadline rules ("action within N hours/days of an event") — these are binary date-difference checks, NOT reporting metrics; never nominate them as process/workflow.
 NOMINATE FOR DROP only if the rule is primarily: a pure endpoint/population definition, statistical methodology, a reporting metric, an exploratory analysis/correlation, a permissive option ("may"), a broad meta-compliance umbrella ("follow GCP"), a pure term/threshold definition with no embedded action, a pure aspiration, or purely subjective investigator judgment with no objective anchor.
 
 KEEP IS THE SAFE DEFAULT — when unsure, do not nominate. You are flagging only the clearly non-binary.
@@ -46,7 +47,7 @@ For each candidate decide:
 - "defend": there IS a protocol-grounded way to author a binary, deviation-producing rule — a measurable anchor, a footnote that makes it testable, OR a legitimate trial-level / site-level governance KRI (interim/enrollment trigger, cohort gating, DSMB approval, randomization stratification, IRB approval, IP accountability, etc.). State the basis.
 - "confirm": after genuinely trying, there is no objective, checkable anchor — it is truly definitional / permissive / subjective.
 
-GUARDRAIL — discretionary is NOT binary: a procedure the protocol leaves to discretion ("may", "optionally", "in a subset", "per Sponsor instruction", "per investigator judgment") is NOT defensible by arguing "if performed, presence is checkable" — discretion is not a protocol-mandated trigger, so non-performance is not a deviation → "confirm". Only "defend" a conditional rule when the trigger is a protocol-DEFINED, recorded clinical condition (e.g. "if total bilirubin abnormal", "women of childbearing potential") AND the protocol REQUIRES the action when it holds.
+GUARDRAIL — discretionary is not an ordinary presence rule, but not an automatic confirm either. A discretionary procedure ("may", "optionally", "in a subset", "per Sponsor instruction", "per investigator judgment") is NOT defended as an ordinary presence rule ("if performed, presence is checkable" is not enough — non-performance is not a deviation). Decide: (1) "defend" via INVERSION when the authorization is documentable (a Sponsor instruction, imaging-plan designation, recorded gate) — the deviation is performing it WITHOUT documented authorization, omission is not a deviation; (2) "defend" as a scoped presence rule when the protocol REQUIRES it for a protocol-DEFINED, recorded subset/trigger (e.g. "if total bilirubin abnormal", "women of childbearing potential", "applicable sites"); (3) "confirm" only when there is neither a documentable authorization nor a protocol-defined recorded trigger to check against.
 
 BIAS TOWARD "defend" for genuine data-checks, but apply the guardrail above strictly. Only "confirm" if you cannot find any protocol basis to keep it.
 
@@ -81,7 +82,7 @@ The Golden Set <protocol_id> has <X> rules with each `Rule for LLM` authored fro
   intent: <one-line purpose>
   applies_to: <clinical denominator — e.g. "enrolled subjects", "every SAE", "every activated site">
   evidence_expected: <the clinical artifact that must exist; never a table/column>
-  acceptance: <open set of sub-slots: timing / required / preferred / conditional / pass / override>
+  acceptance: <open set of sub-slots: timing / required / preferred / conditional / trigger / pass / override>
   deviation: <the violation in clinical terms>
   provenance: <terse section + page; NO footnote numbers>
 A `Deviation Level` column (subject / site / trial) was also assigned.
@@ -96,8 +97,10 @@ FLAG CATEGORIES
 - "omitted-detail": a checkable detail present in the protocol/footnotes/columns is missing from the rule's slots (e.g. an acceptability window left only in the quote, an analyte dropped, an OR collapsed to AND). THE MOST IMPORTANT FLAG.
 - "jargon": meta-commentary, self-referential tags, or a footnote number ("[footnote 12]", "Footnote 14") in a slot instead of a plain clinical statement.
 - "filler": boilerplate that adds length without a check; should be trimmed.
+- "visit-window-in-timing": a visit-anchored procedure's acceptance.timing restates the visit's calendar window ("Day 12-16", "Day -29 to 0") instead of naming the visit — the window belongs to the dedicated visit check-in rule (the procedure's own footnote window is fine).
 - "bad-denominator": `applies_to` is a data filter or wrong population ("randomized" for an eligibility criterion, "active subject").
 - "restated-criterion": `evidence_expected` restates the criterion instead of naming a clinical artifact.
+- "domain-overreach": a presence/activity rule's `acceptance`/`deviation` re-judges a conclusion owned by another domain (e.g. asserts "all eligibility criteria met") instead of just checking the activity was performed/documented.
 - "names-data": rule names a table/column/code/join (belongs downstream, not in the Protocol rule).
 - "unclear": a slot is vague or missing data the engine needs.
 - "inconsistent": rule contradicts/drifts from the protocol text or other Golden Set columns.
@@ -131,7 +134,7 @@ After all reviewers complete:
 3. Sort by vote count, descending.
 4. Apply changes per the stage's threshold:
    - **Stage 1 (nominate):** any drop vote → candidate (keep-biased; the bar to *survive* is in Stage 2, not here).
-   - **Stage 2 (defend, drops):** cluster equivalent candidates into families and rule per family; drop on a clear ≥ 4/5 (or ≥⅔ pooled) confirm; restore if defend ≥ 3/5; **escalate every 3–2 near-tie**. Discretionary/optional procedures → confirm-drop (not defensible).
+   - **Stage 2 (defend, drops):** cluster equivalent candidates into families and rule per family; drop on a clear ≥ 4/5 (or ≥⅔ pooled) confirm; restore if defend ≥ 3/5; **escalate every 3–2 near-tie**. Discretionary/optional procedures are defended via inversion (deviation = performed without documented authorization) or as a scoped presence rule when required for a defined recorded subset; confirm-drop only pure unanchored discretion.
    - **Stage 4 (fixes):** default ≥ majority (≥ 3/5 or ≥ 2/3). Higher = more conservative; lower = noisier.
 5. Singleton flags (1 vote) are not acted on automatically. They get logged for the user's awareness, but they don't drive changes. A panel flag that conflicts with a user-approved pattern is dismissed as noise (surface it, don't auto-apply).
 

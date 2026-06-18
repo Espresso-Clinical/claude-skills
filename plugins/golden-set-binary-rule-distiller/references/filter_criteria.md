@@ -4,7 +4,7 @@ This file is the working reference for Stage 1 (drop nomination) and Stage 2 (dr
 
 The filter is an **authoring-feasibility test**: a rule is kept iff a binary, unambiguously-testable `Rule for LLM` can be authored for it from the protocol (the incoming Golden Set has no usable `Rule for LLM` — Stage 3 authors it).
 
-**This rubric is keep-biased and runs across two panels (both Gemini 3.5 Flash, high thinking):** in **Stage 1** a panel *nominates* drop candidates (any drop vote makes a rule a candidate — keep is the default); in **Stage 2** a second panel *defends* each candidate, ruling **equivalent rules as one family**: a family is dropped only on a clear **≥ 4/5 confirm** (or ≥ ⅔ of pooled family votes), restored if the defense reaches ≥ 3/5, and **every 3–2 near-tie is escalated to the user**. No single reviewer drops a rule, and no rule is dropped on a knife-edge vote. Discretionary/optional procedures are not defensible (see drop list). The criteria below are what every reviewer applies; "lean toward drop" never means "drop on one opinion" — it means "nominate for the defense panel."
+**This rubric is keep-biased and runs across two panels (both Gemini 3.5 Flash, high thinking):** in **Stage 1** a panel *nominates* drop candidates (any drop vote makes a rule a candidate — keep is the default); in **Stage 2** a second panel *defends* each candidate, ruling **equivalent rules as one family**: a family is dropped only on a clear **≥ 4/5 confirm** (or ≥ ⅔ of pooled family votes), restored if the defense reaches ≥ 3/5, and **every 3–2 near-tie is escalated to the user**. No single reviewer drops a rule, and no rule is dropped on a knife-edge vote. Discretionary/optional procedures are not kept as ordinary presence rules, but can be invert-kept or kept-scoped rather than dropped (see drop list). The criteria below are what every reviewer applies; "lean toward drop" never means "drop on one opinion" — it means "nominate for the defense panel."
 
 ## The three filter criteria (a rule must satisfy ALL three to be kept)
 
@@ -47,11 +47,15 @@ Drop any rule that is primarily:
 - **Reporting metrics.** "% of subjects with X are reported." These describe what gets summarized in a CSR, not what gets flagged in monitoring.
 - **Exploratory analyses or correlations.** "Correlation between anti-phage antibodies and treatment outcome." Hypothesis-generating, not pass/fail.
 - **Permissive options.** "Sponsor may reduce enrollment to N subjects." Authority statements, not protocol violations.
-- **Discretionary / optional procedures.** Anything performed at someone's discretion — "may be performed", "optionally", "in a subset", "per Sponsor instruction", "per investigator judgment". DROP. **These are NOT rescued by an "if it was performed, its presence is checkable" argument** — discretion is not a protocol-mandated trigger, so non-performance can't be a deviation. Distinguish from a **conditional-mandatory** rule — "if [protocol-defined, recorded clinical condition], then [action] is required" (e.g. "direct bilirubin if total bilirubin is abnormal"; "pregnancy test for women of childbearing potential") — which is KEEPABLE because the trigger is a defined recorded condition and the action is required when it holds.
+- **Discretionary / optional procedures.** Anything performed at someone's discretion — "may be performed", "optionally", "in a subset", "per Sponsor instruction", "per investigator judgment". Non-performance is NOT a deviation (discretion is not a protocol-mandated trigger), so these are never kept as an ordinary presence rule, and an "if it was performed, its presence is checkable" argument does NOT by itself justify one. Decide among three outcomes:
+  - **Invert and KEEP** when the authorization is *documentable* (a Sponsor instruction, an imaging-plan designation, a recorded per-protocol gate): the deviation is performing it *without* documented authorization, and omission is explicitly NOT a deviation (author per rewrite_format.md rule 11).
+  - **Keep as an ordinary presence rule scoped to the designated population** when the protocol *requires* it for a **conditional-mandatory** trigger or a defined recorded subset (e.g. "direct bilirubin if total bilirubin is abnormal"; "pregnancy test for women of childbearing potential"; "required for subjects at applicable sites / all main-phase patients per the imaging plan"): the trigger/denominator is defined and recorded and the action is required when it holds.
+  - **DROP** only when there is neither a documentable authorization to check against nor a protocol-defined recorded trigger — pure unanchored discretion.
 - **Broad meta-compliance umbrellas.** Generic "follow GCP / 21 CFR / Helsinki" with no discrete data check.
 - **Pure term or threshold definitions** with no embedded action. "A significant pathogen is >10⁶ CFU per plate." Defines a threshold used elsewhere; doesn't itself trigger a deviation.
 - **Pure aspirations** with no measurable anchor (Case C above).
 - **Subjective investigator-judgment rules** with no objective data point. "Any local reaction that in the investigator's judgment constitutes an AE." If the only trigger is opinion, the rule isn't data-checkable.
+  - **Mixed objective + subjective bundle:** do NOT drop the whole bundle — the objective trigger(s) keep it binary. Keep it, and flag it in the audit log for the extractor to split into one rule per trigger. Only purely-subjective members are non-binary; never lose the objective check because a subjective member rides along.
 
 ## Keep list — patterns that satisfy the filter
 
@@ -64,6 +68,16 @@ Keep rules with:
 - **Inclusion/exclusion criteria** — "subject is excluded if hemoglobin < 7 g/dL".
 - **Stopping rules** — "discontinue if ALT > 8× ULN".
 - **Trial-level cumulative checks** — "DMC meets every 4-6 months", "active:placebo ratio is 2:1".
+- **Inverted optional (Sponsor-gated) checks** — an optional/discretionary procedure whose authorization is documentable: the deviation is *performed without documented authorization* (omission is not a deviation). See rewrite_format.md rule 11.
+
+## Timeliness / reporting-deadline rules — keep via a date proxy
+
+A rule that requires an action within N hours/days of an event ("SAE reported within 24 h of awareness", "AE entered into the CRF within N days") reads like workflow, but it is **binary**: it is checkable as a date difference, (action date − event date) ≤ N. **Never nominate these for drop as "process", "workflow", or "reporting metric".**
+
+- Author the check against the closest dates the trial actually records. When the exact clock the protocol names is not captured in EDC (e.g. the precise investigator-awareness timestamp), fall back to the nearest available dates — e.g. (CRF entry date − event onset date) ≤ N — and state that proxy in `evidence_expected` (see rewrite_format.md, rule 9).
+- If a reporting rule has no clean clock at all (neither a usable event date nor an action date to difference), keep it but narrow the check to the part that IS recorded — e.g. "the outcome was recorded" — rather than dropping it.
+
+This is distinct from a true **reporting metric** ("% of subjects with X are summarised in the CSR"), which describes a CSR summary, not a per-event deadline, and stays on the drop list.
 
 ## Cross-check discipline — the rule that prevents fabrication
 
@@ -104,5 +118,8 @@ Surface these in the audit log, do not silently fix:
 - **Truncated protocol-quote text.** Citation ends mid-word or mid-sentence.
 - **Copy-paste boilerplate descriptions.** Same Description text reused on rules that mean different things.
 - **Mis-anchored protocol references.** Citation pointing at a section that doesn't support the rule.
+- **Sentence-fragment / raw-protocol Names.** A `KRI Name` that is a truncated protocol sentence rather than a concise label.
+- **Authoring meta-notes in Descriptions.** A `Description` carrying machine leftovers (e.g. "No existing KRI covers…").
+- **Malformed / orphan provenance.** A `Protocol Reference & Quote` like "orphan-page-NN" with no real section + verbatim quote.
 
-Per the hard constraints, only fix these on explicit user authorization.
+Per the hard constraints, only fix these on explicit user authorization. The metadata-hygiene items (Names, Descriptions, provenance) are produced upstream by the **extractor** — that is where they are fixed; the distiller surfaces them in the audit log but never edits them (Constraint #1).
