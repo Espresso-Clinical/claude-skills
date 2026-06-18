@@ -42,6 +42,17 @@ ROUTE_SIGNALS = [
 CANDIDATE_ID = re.compile(r"^SOA-(?:CROSS|ORPHAN-FOOTNOTE)-", re.IGNORECASE)
 
 
+def classify_text(text):
+    """Return (target_domain, kind, matched_text) if free text matches a cross-domain
+    signal, else (None, None, None). Shared by the router and the SOA generator (S6),
+    so a cross-domain cross-visit rule is routed out rather than distributed."""
+    for pat, domain, kind in ROUTE_SIGNALS:
+        m = re.search(pat, text or "", re.IGNORECASE)
+        if m:
+            return domain, kind, m.group(0)
+    return None, None, None
+
+
 def classify(kri):
     """Return (target_domain, kind, matched_text) if this KRI should be routed OUT
     of SOA, else (None, None, None)."""
@@ -51,11 +62,7 @@ def classify(kri):
         str(kri.get(f, "") or "")
         for f in ("kri_name", "description", "rule_for_llm", "supporting_quote")
     )
-    for pat, domain, kind in ROUTE_SIGNALS:
-        m = re.search(pat, blob, re.IGNORECASE)
-        if m:
-            return domain, kind, m.group(0)
-    return None, None, None
+    return classify_text(blob)
 
 
 def route_cross_domain(kris):

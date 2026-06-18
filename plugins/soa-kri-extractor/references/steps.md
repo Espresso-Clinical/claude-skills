@@ -105,6 +105,8 @@ Sources of the `<items>` list:
 
 `parse_enrichment()` also captures **named drugs/agents** when a footnote frames them with a permitted / prohibited / rescue cue (e.g. `"patients may use acetaminophen and/or metamizole (dipyrone)"`). These are surfaced in the SOURCE line only (one labeled clause) so the drug names are not lost; the rule wording is left light because the Distiller re-authors it.
 
+**Pass 3 — cross-visit distribution (S6):** each ontology `cross_visit_rule` (now `{rule, label, applies_to_visits}`) is distributed into one per-visit KRI per `applies_to_visit` (or every atomic visit when `"all"`) — **no umbrella**. Exception: a cross-domain cross-rule (washout / restriction / stopping / prior-exposure, via `cross_domain_router.classify_text`) is kept as one `SOA-CROSS` row so S5 routes it to ELIG/SAF.
+
 ## Step 12 — Auto-judgment 6-judge panel prompt
 
 ```

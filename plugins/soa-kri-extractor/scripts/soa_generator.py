@@ -385,34 +385,67 @@ def generate(grid_path, alias_path, footnote_map_path, soa_table_path,
             "_source": "checkin",
         })
 
-    # ── Pass 3 — SOA-CROSS rules from ontology.cross_visit_rules ──────────────
+    # ── Pass 3 — Cross-visit rules from ontology.cross_visit_rules ────────────
+    # S6: distribute each rule into the specific per-visit rows it applies to — no
+    # umbrella. S5 exception: a cross-rule whose content is cross-domain
+    # (washout / restriction / stopping / prior-exposure) is kept as ONE SOA-CROSS
+    # row so the cross_domain_router routes it to its home domain instead.
+    from cross_domain_router import classify_text
     cross_rules = ontology.get("cross_visit_rules") or []
-    for i, cr in enumerate(cross_rules, 1):
+    all_visit_ids = list(visits_by_id.keys())
+    cross_seq = 0
+    for cr in cross_rules:
         rule_text = cr if isinstance(cr, str) else (cr.get("rule") or cr.get("text") or "")
         rule_text = rule_text.strip()
         if not rule_text:
             continue
-        kid = f"SOA-CROSS-{i:03d}"
         quote = rule_text[:200]
-        rule = (f"SOURCE: Per subject: timing of {rule_text[:80]}... relative to the protocol-defined reference points.\n"
-                f"CHECK: {rule_text}\n"
-                f"DEVIATION: Any subject-level event/data violating the rule as stated.")
-        kris.append({
-            "kri_id": kid,
-            "kri_name": f"All visits - {quote[:60]}",
-            "description": f"Cross-visit / protocol-wide SOA rule: {rule_text[:200]}",
-            "category_id": "SOA",
-            "category_label": CATEGORY_LABEL,
-            "rule_for_llm": rule,
-            "protocol_reference": f"Schedule of Activities, {page_range_str}",
-            "supporting_quote": quote,
-            "combined_ref": f'Schedule of Activities, {page_range_str} — "{quote}"',
-            "additional_footnotes": None,
-            "severity": "major",
-            "deviation_level": "subject",
-            "agent_count": 10,
-            "_source": "cross_visit",
-        })
+
+        if classify_text(rule_text)[0]:
+            # Cross-domain → keep ONE SOA-CROSS umbrella for S5 to route out (not distributed).
+            cross_seq += 1
+            rule = (f"SOURCE: Per subject: {rule_text[:80]}... relative to the protocol-defined reference points.\n"
+                    f"CHECK: {rule_text}\n"
+                    f"DEVIATION: Any subject-level event/data violating the rule as stated.")
+            kris.append({
+                "kri_id": f"SOA-CROSS-{cross_seq:03d}",
+                "kri_name": f"All visits - {quote[:60]}",
+                "description": f"Cross-domain rule surfaced in SOA (pending route-out): {rule_text[:200]}",
+                "category_id": "SOA", "category_label": CATEGORY_LABEL,
+                "rule_for_llm": rule,
+                "protocol_reference": f"Schedule of Activities, {page_range_str}",
+                "supporting_quote": quote,
+                "combined_ref": f'Schedule of Activities, {page_range_str} — "{quote}"',
+                "additional_footnotes": None, "severity": "major",
+                "deviation_level": "subject", "agent_count": 10, "_source": "cross_visit",
+            })
+            continue
+
+        # S6 — distribute into the visit(s) it applies to (default: all atomic visits).
+        applies = cr.get("applies_to_visits") if isinstance(cr, dict) else None
+        if isinstance(applies, str):
+            applies = all_visit_ids if applies.strip().lower() == "all" else [applies]
+        targets = [v for v in (applies or []) if v in visits_by_id] or all_visit_ids
+        label = (cr.get("label") if isinstance(cr, dict) else None) or rule_text[:50]
+        label = _strip_visit_window(str(label)).strip()
+        for vid in targets:
+            vdisp = _visit_display(vid, visits_by_id)
+            seq += 1
+            rule = (f"SOURCE: Per subject: the obligation '{rule_text[:80]}...' as it applies at the {vdisp} visit.\n"
+                    f"CHECK: At {vdisp}: {rule_text}\n"
+                    f"DEVIATION: At {vdisp}, any subject-level data violating the rule as stated.")
+            kris.append({
+                "kri_id": f"SOA-{vid}-{seq:03d}",
+                "kri_name": f"{vid} - {label}",
+                "description": f"Per-visit distribution of a cross-visit SOA rule at {vdisp}: {rule_text[:160]}",
+                "category_id": "SOA", "category_label": CATEGORY_LABEL,
+                "rule_for_llm": rule,
+                "protocol_reference": f"Schedule of Activities, {page_range_str}",
+                "supporting_quote": quote,
+                "combined_ref": f'Schedule of Activities, {page_range_str} — "{quote}"',
+                "additional_footnotes": None, "severity": "major",
+                "deviation_level": "subject", "agent_count": 10, "_source": "cross_visit_distributed",
+            })
 
     # ── Pass 4 — Orphan-footnote sweep ────────────────────────────────────────
     orphan_fns = (fn_map.get("validation", {}) or {}).get("orphan_in_text") or []

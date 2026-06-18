@@ -84,7 +84,7 @@ Every refinement, update, or improvement to this skill is **additive**. Never re
 - `"V3, V5, V7"` → 3 atomic visits ✓
 - `"all visits"` named multi-visit set → expand to N atomic per-visit KRIs ✓
 
-**Cross-visit rules valid for all visits** → emit N atomic per-visit KRIs (one rule per visit), never a single multi-visit KRI.
+**Cross-visit rules valid for all visits** → emit N atomic per-visit KRIs (one rule per visit), never a single multi-visit KRI. Step 9 Pass 3 implements this: it distributes each ontology `cross_visit_rule` into one KRI per `applies_to_visit` (or all atomic visits when `"all"`) and emits **no umbrella**. The one exception is a **cross-domain** cross-rule (washout / restriction / stopping / prior-exposure), kept as a single `SOA-CROSS` row so S5 routes it to ELIG/SAF instead of distributing it into SOA.
 
 **Footnote-driven test decomposition** (umbrella lab / assessment rows) — when a single row's *label* is a generic category (e.g. `"Laboratory tests"`, `"Safety labs"`, `"Clinical laboratory assessments"`, `"Blood tests"`) but its **footnotes enumerate ≥2 distinct named tests**, split into one atomic KRI per named test, per visit the row is marked — then drop the umbrella:
 - `"Laboratory tests"` + footnotes naming a chemistry panel, a blood count, and a coagulation panel → `Biochemistry`, `Complete Blood Count`, `Coagulation` (3 KRIs per marked visit) ✓
@@ -430,7 +430,7 @@ Before assembly, `cross_domain_router.py` flags SOA-surfaced rules whose content
 |---|---|
 | SOA-table (atomic-grid derived) | 100 — never deleted |
 | SOA-CHECKIN | 90 |
-| SOA-CROSS (cross-visit from ontology) | 80 |
+| SOA-CROSS (cross-domain cross-rule, pending S5 route-out) | 80 |
 | SOA-TEXT (narrative-only) | 70 |
 | SOA-ORPHAN-FOOTNOTE | 60 |
 
