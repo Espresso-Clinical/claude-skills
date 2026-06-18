@@ -66,6 +66,9 @@ The `Description` and `Protocol Reference & Quote` are hypotheses. If the `Descr
 - A **pre-treatment lab** that a footnote makes mandatory ("the following must be available and reviewed prior to first treatment: …") DOES get a `required` subset (the mandatory items, with AND/OR logic) and a `preferred` full panel.
 The analyte list is a deviation trigger **only** where a footnote makes it mandatory.
 
+### 9. Timeliness rules — name the date proxy in `evidence_expected`
+A "within N hours/days of an event" rule is authored as a date difference. In `evidence_expected`, name the two dated artifacts the check differences (the event date and the action date). When the exact clock the protocol names isn't recorded, fall back to the closest available dates and say so plainly — never drop the rule for lack of the precise timestamp. If no clean clock exists at all, narrow the `deviation` to the part that is recorded (e.g. "the outcome was not recorded"). See filter_criteria.md "Timeliness / reporting-deadline rules".
+
 ## Worked examples (real rules, across the five domains)
 
 ### SOA-008 — V1 Biochemistry (required-subset lab; the flagship)
@@ -131,6 +134,7 @@ acceptance:
 deviation: "an SAE reported to the Sponsor more than 24 hours after investigator awareness."
 provenance: "§15.6 p.84."
 ```
+If the precise awareness timestamp isn't captured, `evidence_expected` names the closest recorded dates instead (e.g. the SAE onset date and the SAE-form entry date) and the check becomes (entry date − onset date) ≤ 24 h — state the proxy explicitly rather than dropping the rule.
 
 ### OPS-COMP-003 — EC/IRB approval before activation (site denominator)
 ```yaml

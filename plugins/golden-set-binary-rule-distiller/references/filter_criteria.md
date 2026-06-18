@@ -65,6 +65,15 @@ Keep rules with:
 - **Stopping rules** — "discontinue if ALT > 8× ULN".
 - **Trial-level cumulative checks** — "DMC meets every 4-6 months", "active:placebo ratio is 2:1".
 
+## Timeliness / reporting-deadline rules — keep via a date proxy
+
+A rule that requires an action within N hours/days of an event ("SAE reported within 24 h of awareness", "AE entered into the CRF within N days") reads like workflow, but it is **binary**: it is checkable as a date difference, (action date − event date) ≤ N. **Never nominate these for drop as "process", "workflow", or "reporting metric".**
+
+- Author the check against the closest dates the trial actually records. When the exact clock the protocol names is not captured in EDC (e.g. the precise investigator-awareness timestamp), fall back to the nearest available dates — e.g. (CRF entry date − event onset date) ≤ N — and state that proxy in `evidence_expected` (see rewrite_format.md, rule 9).
+- If a reporting rule has no clean clock at all (neither a usable event date nor an action date to difference), keep it but narrow the check to the part that IS recorded — e.g. "the outcome was recorded" — rather than dropping it.
+
+This is distinct from a true **reporting metric** ("% of subjects with X are summarised in the CSR"), which describes a CSR summary, not a per-event deadline, and stays on the drop list.
+
 ## Cross-check discipline — the rule that prevents fabrication
 
 Before keeping or dropping a rule, open the protocol PDF at the cited section/page in the `Protocol Reference & Quote` column and read the surrounding context (the full paragraph, not just the snippet). Then decide.

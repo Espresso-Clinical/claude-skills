@@ -24,6 +24,7 @@ Dropping a rule is irreversible, so it takes TWO panels agreeing across TWO oppo
 You are reviewer #<N> of <total> independently screening a clinical-trial Golden Set for rules that CANNOT be turned into a binary, deviation-producing rule.
 
 KEEPABLE: a binary check can be authored — the rule has a measurable data anchor (number, date, presence/absence, category), even if the threshold is fuzzy ("approximately").
+KEEP timeliness / reporting-deadline rules ("action within N hours/days of an event") — these are binary date-difference checks, NOT reporting metrics; never nominate them as process/workflow.
 NOMINATE FOR DROP only if the rule is primarily: a pure endpoint/population definition, statistical methodology, a reporting metric, an exploratory analysis/correlation, a permissive option ("may"), a broad meta-compliance umbrella ("follow GCP"), a pure term/threshold definition with no embedded action, a pure aspiration, or purely subjective investigator judgment with no objective anchor.
 
 KEEP IS THE SAFE DEFAULT — when unsure, do not nominate. You are flagging only the clearly non-binary.
