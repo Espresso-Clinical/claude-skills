@@ -1027,7 +1027,7 @@ Each pipeline run produces these files in the output directory:
 ## Quality rules (apply to every KRI)
 
 1. **Faithfulness**: Use exact drug names, doses, thresholds, timing windows from the protocol. Never generalize ("emergency treatment" → name the drugs).
-2. **Data source**: Washout KRIs must say "by checking medication logs and visit timestamps".
+2. **Data source & washout completeness**: Washout KRIs must say "by checking medication logs and visit timestamps". **Encode EVERY facet the protocol specifies, not just the headline interval (C5):** the base washout interval AND any half-life-multiple extension for long-acting / extended-release forms ("whichever is longer") AND any abstinence required DURING the reporting/follow-up period. Cite the **operative washout sentence verbatim**, never a generic page range. A washout the protocol states once per study arm/cohort is **one KRI per arm — not a duplicate** (different arm, fails independently; preserve every twin). One KRI per washed-out agent/class.
 3. **Long-format sources — enumerate values**: For source tables organised as one row per item (lab analyte, vital test code, AE per visit, con-med per record), `rule_for_llm` must enumerate the exact values to look for (e.g. all 14 lipid-panel analytes, the 5 vital-sign components). Never use the collective name only ("biochemistry panel", "vital signs", "AE list"). The LLM cannot expand a generic name into the underlying values; rules that rely on the collective name produce false `insufficient_data`.
 4. **Vitals position**: Use the exact position wording the protocol uses (e.g. "supine position").
 5. **Analysis sets**: Use the protocol's exact definition — ITT ≠ mITT ≠ FAS.

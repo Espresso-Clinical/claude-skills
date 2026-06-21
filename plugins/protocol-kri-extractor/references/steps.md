@@ -346,6 +346,11 @@ EXTRACTION RULES:
   if the dose is stable for ≥2 months prior to Day 0", "allowed up to X mg/day for a
   non-study indication") is a SAF rule encoding that condition — capture it; do not skip it
   because it is phrased as a permission rather than a prohibition.
+- Washout completeness (C5): for any washout / drug-free-interval requirement, encode EVERY
+  facet — base interval, half-life-multiple extension for long-acting / extended-release forms
+  ("whichever is longer"), and abstinence required during the reporting/follow-up period — not
+  just the headline interval. Cite the operative washout sentence verbatim; a washout stated
+  once per arm is one KRI per arm (not a duplicate).
 
 Return ONLY a JSON array
 ```

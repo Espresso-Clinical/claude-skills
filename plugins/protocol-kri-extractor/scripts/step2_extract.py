@@ -124,6 +124,7 @@ allergic reaction management protocols, stopping rules, DSMB triggers, rescue me
 - Include specific AESI categories as defined in the protocol
 - Distinguish: pre-IMP conditions = medical history (not AE)
 - Include during-study concomitant / prohibited-therapy restrictions as SAF-CONMED — one per named agent/class, including conditional permissions ("permitted only if ..."); the pre-study lookback for the same agent is a separate ELIG exclusion
+- Washout rules: encode every facet (base interval; half-life-multiple extension for long-acting/ER forms; abstinence during the reporting period), cite the operative section verbatim, keep per-arm twins (C5)
 - Include post-study follow-up safety collection rules"""
     },
     "END": {
