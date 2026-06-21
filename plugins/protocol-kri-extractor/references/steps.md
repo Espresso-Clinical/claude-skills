@@ -287,7 +287,7 @@ Return ONLY a JSON array
 
 ### SAF prompt
 
-**ATOMICITY**: One reporting rule, one stopping rule, one emergency protocol = one KRI. Never combine AE reporting + SAE reporting into one KRI.
+**ATOMICITY**: One reporting rule, one stopping rule, one emergency protocol = one KRI. Never combine AE reporting + SAE reporting into one KRI. **A multi-trigger discontinuation / withdrawal list is NOT one rule — emit one KRI per objective trigger (C4)** (e.g. "discontinue IP for related SAE, Grade ≥3 AE, Grade 3 lab abnormality, or hypersensitivity" → 4 KRIs). Likewise a **multi-step management / emergency procedure → one KRI per action** (e.g. anaphylaxis: "epinephrine, then antihistamine, then observe ≥60 min" → 3 KRIs). Objective triggers/actions are testable KRIs; a subjective trigger ("at investigator discretion") is captured faithfully with its framing (Quality Rule 19) — not dropped here; the downstream distiller's objective/subjective split decides survival.
 
 **ATOMICITY — compound clauses (refinement)**: Apply the refined compound-clause rule (SKILL.md "Atomization of compound clauses"). Split ONLY when BOTH preconditions hold: (1) each sub-condition can actually fail, (2) it's a true enumeration not illustrative examples. Do NOT split single-field ranges or always-true clauses. Examples: "ALT or AST >3×ULN or bilirubin >2×ULN" → 3 KRIs ✓ (each a distinct lab); solicited AE list (malaise, arthralgia, fever, chills, skin rash, anorexia, nausea, vomiting) → 8 KRIs ✓ (each a distinct named AE); "report SAE within 24h AND follow up within 30 days" → 2 KRIs ✓ (two distinct timeline obligations).
 

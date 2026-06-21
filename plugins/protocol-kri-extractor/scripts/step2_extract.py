@@ -120,6 +120,7 @@ CATEGORY_CONFIGS = {
 allergic reaction management protocols, stopping rules, DSMB triggers, rescue medication limits.
 - Include exact reporting timeframes (24h, 48h, etc.)
 - Include exact drug names and doses for emergency treatments
+- Split multi-trigger discontinuation lists into one KRI per objective trigger, and multi-step management/emergency procedures into one KRI per action (C4); subjective triggers kept with framing for the distiller
 - Include specific AESI categories as defined in the protocol
 - Distinguish: pre-IMP conditions = medical history (not AE)
 - Include during-study concomitant / prohibited-therapy restrictions as SAF-CONMED — one per named agent/class, including conditional permissions ("permitted only if ..."); the pre-study lookback for the same agent is a separate ELIG exclusion
