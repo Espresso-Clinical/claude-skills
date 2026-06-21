@@ -100,6 +100,7 @@ CATEGORY_CONFIGS = {
 - Capture the criterion's exact requirement (inclusion) or excluded condition (exclusion) in the description
 - Include exact numeric thresholds, timeframes, and clinical terms verbatim
 - Lab abnormality thresholds: list each parameter and its threshold value
+- Mixed objective + judgment criterion: split so the binary clause is its own KRI; keep the judgment clause with its framing preserved (do not skip the whole criterion because one clause is judgment)
 - Pre-study concomitant / prohibited-therapy bans (lookback before first dose) are ELIG exclusions — one per named agent/class; the during-study ban for the same agent is a separate SAF rule"""
     },
     "SAF": {

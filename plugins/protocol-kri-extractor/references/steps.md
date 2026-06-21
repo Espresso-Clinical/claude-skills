@@ -253,6 +253,7 @@ Quick examples:
 - "Males or females ≥18 to <85" → do NOT create a "sex" KRI ✗ (always TRUE — covers all humans); only age is verifiable content
 - "any medication (such as BRMs, cancer immunomodulators, systemic steroids) causing immunosuppression" → ONE KRI ✗ (illustrative examples under umbrella "any medication that causes immunosuppression"; put examples in `description`)
 - "surface area ≥1 cm² and ≤40 cm²" → ONE KRI ✗ (single data field `surface_area_cm2`, one range check)
+- "significant cardiac disease (investigator opinion) OR LVEF <40%" → 2 KRIs ✓ (binary LVEF clause becomes its own testable KRI; judgment clause kept with framing preserved — never skip the whole criterion because one clause is judgment)
 
 Verifiability test: (a) can sub-KRI actually fail? (b) does it read a different data field than siblings? BOTH must be YES to split. When in doubt, keep combined.
 
