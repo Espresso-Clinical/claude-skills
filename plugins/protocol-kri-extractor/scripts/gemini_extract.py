@@ -283,7 +283,7 @@ SUB_AREA_TURNS = {
         ("Inclusion criteria",
          "Read Section 4.1 (Inclusion Criteria) of the PDF. Extract a KRI for EVERY inclusion criterion AND every sub-criterion (e.g. a criterion with sub-parts a, b, c; a sub-part with items i-v). Use prefix ELIG-INC-NNN. Extract every criterion regardless of whether the wording is qualitative or quantitative — capture the criterion's exact requirement in the description, as faithfully as the protocol allows."),
         ("Exclusion criteria",
-         "Read Section 4.2 (Exclusion Criteria). Extract a KRI for EVERY exclusion criterion AND every sub-criterion. Use prefix ELIG-EXC-NNN. Output only NEW KRIs not produced in turn 1."),
+         "Read Section 4.2 (Exclusion Criteria). Extract a KRI for EVERY exclusion criterion AND every sub-criterion. Use prefix ELIG-EXC-NNN. Also scan any Concomitant / Prohibited Therapy section (often Section 6 or 7) for therapies banned during a PRE-STUDY lookback window before first dose (e.g. 'no systemic corticosteroids within 3 months prior to Day 1') and capture each as an ELIG-EXC KRI — one per named agent/drug class with its exact lookback window. Capture ONLY the pre-study lookback half here; the same agent's during-study restriction is captured in the SAF 'Concomitant & prohibited therapies' turn — they are paired, not duplicates. Output only NEW KRIs not produced in turn 1."),
     ],
     "SAF": [
         ("AE/SAE reporting",
@@ -296,6 +296,8 @@ SUB_AREA_TURNS = {
          "Extract every KRI about DILI/Hy's law thresholds from the relevant sections: ALT/AST multipliers of ULN, bilirubin thresholds, INR thresholds, symptom-triggered workup, Hy's law case follow-up. Use prefix SAF-DILI. Output only NEW KRIs."),
         ("Causality & pregnancy",
          "Extract every KRI about: causality assessment, AE severity grading (CTCAE), AE intensity categories, AE outcome categories, pregnancy reporting (timeline, outcome follow-up, miscarriage/abnormality as SAE), contraception compliance. Output only NEW KRIs."),
+        ("Concomitant & prohibited therapies",
+         "Read the Concomitant / Prohibited Therapy section (often Section 6 or 7). Extract every DURING-study restriction on prohibited or conditionally-permitted therapies — one KRI per named agent/drug class with its exact condition. Use prefix SAF-CONMED. Include conditional permissions verbatim (e.g. 'permitted only if the dose is stable for at least 2 months prior to Day 0', 'allowed up to X mg/day for a non-study indication') — do not skip an item because it is phrased as a permission rather than a prohibition. Capture ONLY the during-study half; the pre-study lookback exclusion for the same agent is captured in the ELIG 'Exclusion criteria' turn — they are paired, not duplicates. Output only NEW KRIs."),
     ],
     "END": [
         ("Primary + key secondary endpoints",
