@@ -52,7 +52,10 @@ Split a single protocol sentence into MULTIPLE KRIs (one per scope) whenever it 
   - TWO TIME-SCOPES — e.g. "prohibited prior to AND during the study" → 2 KRIs: a
     pre-treatment/screening check (reads screening history) AND an on-study check
     (reads the on-study con-med log). Capturing only the "prior to" half is a
-    coverage failure.
+    coverage failure. For a concomitant/prohibited therapy this means the pre-study
+    half is an ELIG exclusion and the during-study half is a SAF restriction (one per
+    named agent/class); a conditional permission ("permitted only if ...") is itself a
+    SAF rule — capture it. The two halves are paired, never merged.
   - TWO OBLIGATIONS in one sentence — e.g. "all unresolved AEs are followed for 30
     days post-study AND study-drug-related AEs are followed until resolution" → 2 KRIs.
   - MULTIPLE STUDY PHASES / TIME POINTS — a rule stated for both the safety run-in
@@ -96,7 +99,9 @@ CATEGORY_CONFIGS = {
 - Multi-part criteria (e.g. 5a, 5b): one KRI per lettered sub-part
 - Capture the criterion's exact requirement (inclusion) or excluded condition (exclusion) in the description
 - Include exact numeric thresholds, timeframes, and clinical terms verbatim
-- Lab abnormality thresholds: list each parameter and its threshold value"""
+- Lab abnormality thresholds: list each parameter and its threshold value
+- Mixed objective + judgment criterion: split so the binary clause is its own KRI; keep the judgment clause with its framing preserved (do not skip the whole criterion because one clause is judgment)
+- Pre-study concomitant / prohibited-therapy bans (lookback before first dose) are ELIG exclusions — one per named agent/class; the during-study ban for the same agent is a separate SAF rule"""
     },
     "SAF": {
         "label": "Safety & Toxicity",
@@ -105,6 +110,7 @@ CATEGORY_CONFIGS = {
             "AE": "AE/SAE collection and reporting",
             "PREG": "Pregnancy reporting",
             "ALLERGY": "Allergic reaction management",
+            "CONMED": "Concomitant / prohibited therapy restrictions",
             "DSMB": "Safety monitoring committees",
             "RM": "Rescue medication",
             "STOP": "Treatment discontinuation/stopping rules",
@@ -114,8 +120,11 @@ CATEGORY_CONFIGS = {
 allergic reaction management protocols, stopping rules, DSMB triggers, rescue medication limits.
 - Include exact reporting timeframes (24h, 48h, etc.)
 - Include exact drug names and doses for emergency treatments
+- Split multi-trigger discontinuation lists into one KRI per objective trigger, and multi-step management/emergency procedures into one KRI per action (C4); subjective triggers kept with framing for the distiller
 - Include specific AESI categories as defined in the protocol
 - Distinguish: pre-IMP conditions = medical history (not AE)
+- Include during-study concomitant / prohibited-therapy restrictions as SAF-CONMED — one per named agent/class, including conditional permissions ("permitted only if ..."); the pre-study lookback for the same agent is a separate ELIG exclusion
+- Washout rules: encode every facet (base interval; half-life-multiple extension for long-acting/ER forms; abstinence during the reporting period), cite the operative section verbatim, keep per-arm twins (C5)
 - Include post-study follow-up safety collection rules"""
     },
     "END": {

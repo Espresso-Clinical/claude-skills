@@ -212,7 +212,7 @@ Examples of correct atomicity:
 - "Verify that the key secondary endpoint is calculated as time from randomization to the first occurrence of a composite of CV death, non-fatal MI, and non-fatal stroke"
 - "Verify that the subject has a negative HBsAg test at screening"
 
-**This applies across the 4 in-scope domains:** ELIG (one criterion or sub-criterion = one KRI), SAF (one reporting rule or one stopping rule = one KRI), END (one endpoint definition or one governance rule = one KRI), OPS (one operational rule = one KRI).
+**This applies across the 4 in-scope domains:** ELIG (one criterion or sub-criterion = one KRI), SAF (one reporting rule or one stopping rule = one KRI; a multi-trigger discontinuation list → one KRI per objective trigger — see C4), END (one endpoint definition or one governance rule = one KRI), OPS (one operational rule = one KRI).
 
 ### Atomization of compound clauses (refinement — apply carefully)
 
@@ -237,8 +237,12 @@ A single protocol criterion may contain multiple sub-conditions without explicit
   Example: *"Treated with hyperbaric oxygen therapy or a cellular and/or tissue product (CTP) within 30 days"* → 2 KRIs (HBOT and CTP are distinct interventions with distinct records).
 - **Combined lab thresholds with distinct analytes** — each analyte becomes its own KRI.
   Example: *"ALT or AST >3×ULN and/or bilirubin >1.5×ULN"* → 3 KRIs (ALT, AST, bilirubin are three separate lab values).
+- **Mixed objective + judgment clauses (C2)** — a criterion bundling a binary/objective clause with a subjective/investigator-judgment clause is still split: the objective clause becomes its own atomic, testable KRI, and the judgment clause is captured faithfully with its framing preserved (Quality Rule 15) — neither is dropped here. Do NOT skip the whole criterion because one clause is judgment, and do NOT fold the binary clause into the judgment-flavoured rule (that makes the binary part untestable). Which judgment rules ultimately survive is the downstream distiller's objective/subjective call, not this extractor's.
+  Example: *"clinically significant cardiac disease in the investigator's opinion, OR LVEF <40%"* → 2 KRIs (a judgment KRI with framing preserved + a binary "LVEF <40%" KRI).
+- **Multi-trigger SAF bundles (C4)** — a discontinuation / withdrawal list with several triggers → one KRI per objective trigger; a multi-step management / emergency procedure → one KRI per action. A bundled multi-trigger rule passes/fails as a unit and hides per-trigger failures. Subjective triggers ("at investigator discretion") are captured faithfully (Quality Rule 15) for the downstream distiller's objective/subjective split. Example: *"discontinue IP for related SAE, Grade ≥3 AE, or Grade 3 lab abnormality"* → 3 KRIs.
 - **The SCOPE axis — split by time-scope, study phase, and time point (Fix #6).** A single sentence that asserts the same check across two scopes is two KRIs, because each scope reads a different data source and can fail independently. Atomize along this axis, not only by analyte/criterion:
   - **Two time-scopes:** *"X is prohibited prior to AND during the study"* → 2 KRIs — a pre-treatment/screening check (reads screening history) AND an on-study check (reads the on-study con-med log). Capturing only the "prior to" half is a coverage failure.
+  - **Concomitant / prohibited-therapy domain placement (C1):** when the two time-scopes are a concomitant-therapy rule, the **pre-study half is an ELIG exclusion** (lookback before first dose; reads screening/medical history) and the **during-study half is a SAF restriction** (on-study ban; reads the con-med log). Emit **both** — they are paired, not duplicates, and dedup must never merge them (already enforced by `scope_signature`). Enumerate every named agent/drug class with its threshold (one rule per class), never the collective name. A **conditional permission** ("permitted only if the dose is stable for ≥N months prior to Day 0", "allowed up to X mg/day for a non-study indication") is itself a SAF rule encoding that condition — capture it; do not drop it because it is phrased as a permission rather than a prohibition.
   - **Two obligations in one sentence:** *"all unresolved AEs are followed for 30 days post-study AND study-drug-related AEs are followed until resolution"* → 2 KRIs.
   - **Two study phases / time points:** a rule stated for both the safety run-in and the randomization phase (different anchor or value) → one KRI per phase. (Visit-anchored SOA cases are out of scope here — handled by `soa-kri-extractor`.)
 
@@ -291,6 +295,7 @@ SAF **only** contains KRIs that are about:
 - (d) **Emergency protocols and rescue medication** (specific drugs, doses, routes)
 - (e) **Causality assessment requirements** (AE causality, pregnancy outcome follow-up)
 - (f) **Dose modification rules** (IP frequency change triggers and consequences)
+- (g) **Concomitant / prohibited-therapy restrictions DURING the study** (on-study bans and conditional permissions on specific named agents/classes — one KRI per agent/class). The pre-study lookback for the same agent is an ELIG exclusion, not SAF (see the C1 scope-axis note); the two halves are paired, never merged.
 
 SAF does **NOT** contain:
 - ✗ How to perform a measurement (position, technique, timing within a visit) → **OPS**
@@ -1022,7 +1027,7 @@ Each pipeline run produces these files in the output directory:
 ## Quality rules (apply to every KRI)
 
 1. **Faithfulness**: Use exact drug names, doses, thresholds, timing windows from the protocol. Never generalize ("emergency treatment" → name the drugs).
-2. **Data source**: Washout KRIs must say "by checking medication logs and visit timestamps".
+2. **Data source & washout completeness**: Washout KRIs must say "by checking medication logs and visit timestamps". **Encode EVERY facet the protocol specifies, not just the headline interval (C5):** the base washout interval AND any half-life-multiple extension for long-acting / extended-release forms ("whichever is longer") AND any abstinence required DURING the reporting/follow-up period. Cite the **operative washout sentence verbatim**, never a generic page range. A washout the protocol states once per study arm/cohort is **one KRI per arm — not a duplicate** (different arm, fails independently; preserve every twin). One KRI per washed-out agent/class.
 3. **Long-format sources — enumerate values**: For source tables organised as one row per item (lab analyte, vital test code, AE per visit, con-med per record), `rule_for_llm` must enumerate the exact values to look for (e.g. all 14 lipid-panel analytes, the 5 vital-sign components). Never use the collective name only ("biochemistry panel", "vital signs", "AE list"). The LLM cannot expand a generic name into the underlying values; rules that rely on the collective name produce false `insufficient_data`.
 4. **Vitals position**: Use the exact position wording the protocol uses (e.g. "supine position").
 5. **Analysis sets**: Use the protocol's exact definition — ITT ≠ mITT ≠ FAS.

@@ -158,7 +158,7 @@ The multi-turn method gives Gemini the same iteration capability: one chat sessi
 | Domain | Turns | Coverage |
 |--------|-------|----------|
 | **ELIG** | 2 | 1) Inclusion criteria (§4.1), 2) Exclusion criteria (§4.2) |
-| **SAF** | 5 | 1) AE/SAE reporting (§8), 2) Stopping rules & IP discontinuation (§9), 3) Solicited AEs & infusion monitoring, 4) DILI thresholds (Hy's law), 5) Causality & pregnancy |
+| **SAF** | 6 | 1) AE/SAE reporting (§8), 2) Stopping rules & IP discontinuation (§9), 3) Solicited AEs & infusion monitoring, 4) DILI thresholds (Hy's law), 5) Causality & pregnancy, 6) Concomitant & prohibited therapies |
 | **END** | 5 | 1) Primary + key secondary endpoints, 2) Secondary clinical efficacy endpoints, 3) Biomarker/analyte endpoints, 4) Exploratory endpoints, 5) Governance (populations, sample size, DMC, interim analysis) |
 | **OPS** | 6 | 1) IP Handling & Administration (§7), 2) Blinding & Unblinding, 3) Randomization & Study Design, 4) Procedure Methodology (§6), 5) Documentation & Regulatory, 6) Appendices |
 
@@ -232,7 +232,7 @@ Save adjudication results in `{out_dir}/{cat}_adjudication.json`.
 
 **ID format by category**:
 - ELIG: `ELIG-INC-{NNN}` and `ELIG-EXC-{NNN}`
-- SAF: `SAF-AE-{NNN}`, `SAF-ALLERGY-{NNN}`, `SAF-PREG-{NNN}`, `SAF-RM-{NNN}`, `SAF-STOP-{NNN}`
+- SAF: `SAF-AE-{NNN}`, `SAF-ALLERGY-{NNN}`, `SAF-CONMED-{NNN}`, `SAF-PREG-{NNN}`, `SAF-RM-{NNN}`, `SAF-STOP-{NNN}`
 - END: `END-PRI-{NNN}` (primary), `END-KSEC-{NNN}` (key secondary), `END-SEC-{NNN}` (other secondary), `END-BIO-{NNN}` (biomarker), `END-HCRU-{NNN}` (health care resource utilization), `END-EXP-{NNN}` (exploratory)
 - GOV: `GOV-POP-{NNN}` (analysis populations), `GOV-INT-{NNN}` (interim analysis/alpha), `GOV-END-{NNN}` (study end), `GOV-DMC-{NNN}` (DMC rules)
 - OPS: `OPS-IMP-{NNN}`, `OPS-BLIND-{NNN}`, `OPS-RECS-{NNN}`, `OPS-COMP-{NNN}`
@@ -253,6 +253,7 @@ Quick examples:
 - "Males or females ≥18 to <85" → do NOT create a "sex" KRI ✗ (always TRUE — covers all humans); only age is verifiable content
 - "any medication (such as BRMs, cancer immunomodulators, systemic steroids) causing immunosuppression" → ONE KRI ✗ (illustrative examples under umbrella "any medication that causes immunosuppression"; put examples in `description`)
 - "surface area ≥1 cm² and ≤40 cm²" → ONE KRI ✗ (single data field `surface_area_cm2`, one range check)
+- "significant cardiac disease (investigator opinion) OR LVEF <40%" → 2 KRIs ✓ (binary LVEF clause becomes its own testable KRI; judgment clause kept with framing preserved — never skip the whole criterion because one clause is judgment)
 
 Verifiability test: (a) can sub-KRI actually fail? (b) does it read a different data field than siblings? BOTH must be YES to split. When in doubt, keep combined.
 
@@ -275,13 +276,18 @@ EXTRACTION RULES:
   in additional_footnotes
 - Investigator framing: if a criterion is framed as "Investigator-assessed" or
   "in the Investigator's judgment", preserve that framing in the rule
+- Concomitant / prohibited-therapy pre-study exclusions (C1): any therapy banned for a
+  lookback window before first treatment/randomization (e.g. "no systemic corticosteroids
+  within 3 months prior to Day 1") is an ELIG exclusion — one KRI per named agent/class with
+  its exact lookback window. The SAME agent's during-study ban is a SEPARATE SAF rule
+  (different window) — both halves must exist; do not assume the other domain covers its half.
 
 Return ONLY a JSON array
 ```
 
 ### SAF prompt
 
-**ATOMICITY**: One reporting rule, one stopping rule, one emergency protocol = one KRI. Never combine AE reporting + SAE reporting into one KRI.
+**ATOMICITY**: One reporting rule, one stopping rule, one emergency protocol = one KRI. Never combine AE reporting + SAE reporting into one KRI. **A multi-trigger discontinuation / withdrawal list is NOT one rule — emit one KRI per objective trigger (C4)** (e.g. "discontinue IP for related SAE, Grade ≥3 AE, Grade 3 lab abnormality, or hypersensitivity" → 4 KRIs). Likewise a **multi-step management / emergency procedure → one KRI per action** (e.g. anaphylaxis: "epinephrine, then antihistamine, then observe ≥60 min" → 3 KRIs). Objective triggers/actions are testable KRIs; a subjective trigger ("at investigator discretion") is captured faithfully with its framing (Quality Rule 15) — not dropped here; the downstream distiller's objective/subjective split decides survival.
 
 **ATOMICITY — compound clauses (refinement)**: Apply the refined compound-clause rule (SKILL.md "Atomization of compound clauses"). Split ONLY when BOTH preconditions hold: (1) each sub-condition can actually fail, (2) it's a true enumeration not illustrative examples. Do NOT split single-field ranges or always-true clauses. Examples: "ALT or AST >3×ULN or bilirubin >2×ULN" → 3 KRIs ✓ (each a distinct lab); solicited AE list (malaise, arthralgia, fever, chills, skin rash, anorexia, nausea, vomiting) → 8 KRIs ✓ (each a distinct named AE); "report SAE within 24h AND follow up within 30 days" → 2 KRIs ✓ (two distinct timeline obligations).
 
@@ -304,6 +310,9 @@ SAF contains ONLY rules about:
   ✓ Causality assessment requirements
   ✓ Pregnancy-related safety follow-up (EDP reporting, neonatal death, partner exposure)
   ✓ Dose modification rules and their triggers (e.g. IP frequency change after confirmed LDL-C)
+  ✓ Concomitant / prohibited-therapy restrictions DURING the study (on-study bans + conditional
+    permissions; one KRI per named agent/class; prefix SAF-CONMED). The PRE-study lookback for the
+    same agent is an ELIG exclusion, not SAF — capture only the during-study half here.
 
 SAF does NOT contain — do not extract these into SAF:
   ✗ "Procedure X was collected at Visit Y" → OUT OF SCOPE (soa-kri-extractor)
@@ -328,6 +337,20 @@ EXTRACTION RULES:
 - Concomitant medication timing: prohibited medications with specific washout/exclusion
   windows (e.g. "IA corticosteroids prohibited within 3 months") should each get their
   own KRI with the exact timing
+- Concomitant-therapy pairing (C1): the during-study ban on a prohibited therapy is a SAF
+  restriction (reads the on-study con-med log); its pre-study lookback is a SEPARATE ELIG
+  exclusion. Emit the SAF during-study half even when an ELIG pre-study rule exists — they are
+  paired, not duplicates, and must never be merged. One KRI per named agent/class. Use prefix
+  SAF-CONMED.
+- Conditional permissions (C1): a therapy "permitted only if [condition]" (e.g. "permitted
+  if the dose is stable for ≥2 months prior to Day 0", "allowed up to X mg/day for a
+  non-study indication") is a SAF rule encoding that condition — capture it; do not skip it
+  because it is phrased as a permission rather than a prohibition.
+- Washout completeness (C5): for any washout / drug-free-interval requirement, encode EVERY
+  facet — base interval, half-life-multiple extension for long-acting / extended-release forms
+  ("whichever is longer"), and abstinence required during the reporting/follow-up period — not
+  just the headline interval. Cite the operative washout sentence verbatim; a washout stated
+  once per arm is one KRI per arm (not a duplicate).
 
 Return ONLY a JSON array
 ```
