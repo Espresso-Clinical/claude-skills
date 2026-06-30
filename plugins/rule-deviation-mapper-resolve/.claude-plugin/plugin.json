@@ -1,0 +1,21 @@
+{
+  "name": "rule-deviation-mapper-resolve",
+  "version": "1.0.0",
+  "description": "Refines an existing clinical-trial Golden Set so its rules catch the real, protocol-grounded deviations they should \u2014 driven by a deviation-to-rule mapping (Extend-partial + No-match tabs). Works family-by-family editing only the Rule for LLM cell; authors new protocol-grounded rules for No-match. Protocol is the only source of truth; mandatory traceability + approval ritual before every edit.",
+  "author": {
+    "name": "Espresso Clinical",
+    "email": "eng@espressoclinical.com"
+  },
+  "license": "UNLICENSED",
+  "keywords": [
+    "clinical",
+    "espresso",
+    "deviation",
+    "golden-set",
+    "kri",
+    "rule-for-llm",
+    "mapping",
+    "coverage",
+    "protocol"
+  ]
+}
