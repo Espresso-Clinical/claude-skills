@@ -11,14 +11,20 @@
   "plugins": [
     {
       "name": "sdlc",
-      "description": "SDLC feature workflow agent — guides from Monday ticket through PR submission",
+      "description": "SDLC feature workflow agent \u2014 guides from Monday ticket through PR submission",
       "version": "1.0.0",
       "author": {
         "name": "Espresso Clinical"
       },
       "source": "./plugins/sdlc",
       "category": "productivity",
-      "keywords": ["clinical", "espresso", "sdlc", "workflow", "monday"]
+      "keywords": [
+        "clinical",
+        "espresso",
+        "sdlc",
+        "workflow",
+        "monday"
+      ]
     },
     {
       "name": "protocol-kri-extractor",
@@ -29,18 +35,33 @@
       },
       "source": "./plugins/protocol-kri-extractor",
       "category": "clinical",
-      "keywords": ["clinical", "espresso", "protocol", "kri", "extraction", "cra"]
+      "keywords": [
+        "clinical",
+        "espresso",
+        "protocol",
+        "kri",
+        "extraction",
+        "cra"
+      ]
     },
     {
       "name": "kri-regression-tester",
-      "description": "Regression testing for KRI golden sets — detects when extractor skill updates break approved outputs",
+      "description": "Regression testing for KRI golden sets \u2014 detects when extractor skill updates break approved outputs",
       "version": "1.0.0",
       "author": {
         "name": "Espresso Clinical"
       },
       "source": "./plugins/kri-regression-tester",
       "category": "clinical",
-      "keywords": ["clinical", "espresso", "regression", "testing", "kri", "golden-set", "vault"]
+      "keywords": [
+        "clinical",
+        "espresso",
+        "regression",
+        "testing",
+        "kri",
+        "golden-set",
+        "vault"
+      ]
     },
     {
       "name": "accompanying-doc-kri-extractor",
@@ -51,29 +72,59 @@
       },
       "source": "./plugins/accompanying-doc-kri-extractor",
       "category": "clinical",
-      "keywords": ["clinical", "espresso", "accompanying", "cmp", "csmp", "imp", "sap", "pdhp", "pv", "kri", "extraction"]
+      "keywords": [
+        "clinical",
+        "espresso",
+        "accompanying",
+        "cmp",
+        "csmp",
+        "imp",
+        "sap",
+        "pdhp",
+        "pv",
+        "kri",
+        "extraction"
+      ]
     },
     {
       "name": "soa-kri-extractor",
-      "description": "Extracts SOA (Schedule of Activities) KRIs from clinical trial protocol PDFs — covers both the structured SoA table and narrative cross-visit / methodology / long-term-tracking rules",
+      "description": "Extracts SOA (Schedule of Activities) KRIs from clinical trial protocol PDFs \u2014 covers both the structured SoA table and narrative cross-visit / methodology / long-term-tracking rules",
       "version": "1.0.0",
       "author": {
         "name": "Espresso Clinical"
       },
       "source": "./plugins/soa-kri-extractor",
       "category": "clinical",
-      "keywords": ["clinical", "espresso", "protocol", "soa", "schedule-of-activities", "kri", "extraction", "cra"]
+      "keywords": [
+        "clinical",
+        "espresso",
+        "protocol",
+        "soa",
+        "schedule-of-activities",
+        "kri",
+        "extraction",
+        "cra"
+      ]
     },
     {
       "name": "amendment-sync",
-      "description": "Syncs an existing Golden Set to a new version of a clinical-trial document (protocol or accompanying doc) by diffing old vs new, locating affected KRIs, and running an interactive change-by-change review — without re-running the full extractor",
+      "description": "Syncs an existing Golden Set to a new version of a clinical-trial document (protocol or accompanying doc) by diffing old vs new, locating affected KRIs, and running an interactive change-by-change review \u2014 without re-running the full extractor",
       "version": "1.0.0",
       "author": {
         "name": "Espresso Clinical"
       },
       "source": "./plugins/amendment-sync",
       "category": "clinical",
-      "keywords": ["clinical", "espresso", "amendment", "version-sync", "golden-set", "kri", "diff", "interactive-review"]
+      "keywords": [
+        "clinical",
+        "espresso",
+        "amendment",
+        "version-sync",
+        "golden-set",
+        "kri",
+        "diff",
+        "interactive-review"
+      ]
     },
     {
       "name": "golden-set-binary-rule-distiller",
@@ -84,7 +135,38 @@
       },
       "source": "./plugins/golden-set-binary-rule-distiller",
       "category": "clinical",
-      "keywords": ["clinical", "espresso", "golden-set", "kri", "binary", "deviation", "filter", "rule-for-llm", "protocol"]
+      "keywords": [
+        "clinical",
+        "espresso",
+        "golden-set",
+        "kri",
+        "binary",
+        "deviation",
+        "filter",
+        "rule-for-llm",
+        "protocol"
+      ]
+    },
+    {
+      "name": "rule-deviation-mapper-resolve",
+      "description": "Refines an existing clinical-trial Golden Set so its rules catch the real, protocol-grounded deviations they should \u2014 driven by a deviation-to-rule mapping (Extend-partial + No-match tabs). Works family-by-family editing only the Rule for LLM cell; authors new protocol-grounded rules for No-match. Protocol is the only source of truth; mandatory traceability + approval ritual before every edit.",
+      "version": "1.0.0",
+      "author": {
+        "name": "Espresso Clinical"
+      },
+      "source": "./plugins/rule-deviation-mapper-resolve",
+      "category": "clinical",
+      "keywords": [
+        "clinical",
+        "espresso",
+        "deviation",
+        "golden-set",
+        "kri",
+        "rule-for-llm",
+        "mapping",
+        "coverage",
+        "protocol"
+      ]
     }
   ]
 }
